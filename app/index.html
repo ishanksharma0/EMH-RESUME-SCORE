@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resume & JD Processing</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 800px;
+            margin: 40px auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 20px;
+        }
+        label {
+            font-weight: bold;
+            margin-top: 15px;
+            display: block;
+        }
+        .file-input {
+            margin-bottom: 15px;
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.3s;
+        }
+        .btn:hover {
+            background: #218838;
+        }
+        .output-box {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e9ecef;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Resume & JD Processing</h1>
+        
+        <label for="resumeFile">Upload Resume:</label>
+        <input type="file" id="resumeFile" class="file-input">
+        <button class="btn" onclick="processFile('parse-resume', 'resumeFile', 'resumeOutput')">Parse Resume</button>
+        <div id="resumeOutput" class="output-box"></div>
+        
+        <label for="jdFile">Upload Job Description:</label>
+        <input type="file" id="jdFile" class="file-input">
+        <button class="btn" onclick="processFile('parse-job-description', 'jdFile', 'jdOutput')">Parse JD</button>
+        <div id="jdOutput" class="output-box"></div>
+        
+        <label for="jdEnhanceFile">Upload Job Description for Enhancement:</label>
+        <input type="file" id="jdEnhanceFile" class="file-input">
+        <button class="btn" onclick="processFile('job-description-enhance', 'jdEnhanceFile', 'jdEnhanceOutput')">Enhance JD</button>
+        <div id="jdEnhanceOutput" class="output-box"></div>
+        
+        <label for="resumeScoreFiles">Upload Resumes for Scoring:</label>
+        <input type="file" id="resumeScoreFiles" class="file-input" multiple>
+        <button class="btn" onclick="processMultipleFiles('score-resumes', 'resumeScoreFiles', 'resumeScoreOutput')">Score Resumes</button>
+        <div id="resumeScoreOutput" class="output-box"></div>
+    </div>
+
+    <script>
+        function processFile(endpoint, fileInputId, outputId) {
+            const fileInput = document.getElementById(fileInputId);
+            const outputDiv = document.getElementById(outputId);
+            if (!fileInput.files.length) {
+                alert("Please select a file");
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append("file", fileInput.files[0]);
+            
+            fetch(`http://localhost:8000/api/${endpoint}/`, {
+                method: "POST",
+                body: formData,
+                headers: { "Accept": "application/json" }
+            })
+            .then(response => response.json())
+            .then(data => {
+                outputDiv.innerHTML = formatResponse(data);
+            })
+            .catch(error => {
+                console.error("Error:", error);
+                outputDiv.innerText = "Error processing file.";
+            });
+        }
+
+        function processMultipleFiles(endpoint, fileInputId, outputId) {
+            const fileInput = document.getElementById(fileInputId);
+            const outputDiv = document.getElementById(outputId);
+            if (!fileInput.files.length) {
+                alert("Please select at least one file");
+                return;
+            }
+            
+            const formData = new FormData();
+            for (let i = 0; i < fileInput.files.length; i++) {
+                formData.append("files", fileInput.files[i]);
+            }
+            
+            fetch(`http://localhost:8000/api/${endpoint}/`, {
+                method: "POST",
+                body: formData,
+                headers: { "Accept": "application/json" }
+            })
+            .then(response => response.json())
+            .then(data => {
+                outputDiv.innerHTML = formatResponse(data);
+            })
+            .catch(error => {
+                console.error("Error:", error);
+                outputDiv.innerText = "Error processing files.";
+            });
+        }
+
+        function formatResponse(data) {
+            let html = '<div style="white-space: pre-wrap;">';
+            function parseObject(obj, indent = '') {
+                for (const [key, value] of Object.entries(obj)) {
+                    if (typeof value === 'object' && value !== null) {
+                        html += `<div>${indent}<strong>${key}:</strong></div>`;
+                        parseObject(value, indent + '&nbsp;&nbsp;&nbsp;');
+                    } else {
+                        html += `<div>${indent}<strong>${key}:</strong> ${value}</div>`;
+                    }
+                }
+            }
+            parseObject(data);
+            html += '</div>';
+            return html;
+        }
+    </script>
+</body>
+</html>

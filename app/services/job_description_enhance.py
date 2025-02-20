@@ -2,6 +2,8 @@ from app.utils.file_parser import parse_pdf_or_docx
 from app.services.gpt_service import GPTService
 from app.services.config_service import ConfigService
 from io import BytesIO
+from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
 from app.utils.logger import Logger
 from app.models.schemas import EnhancedJobDescriptionSchema, CandidateProfileSchemaList
 from datetime import datetime
@@ -209,7 +211,8 @@ class JobDescriptionEnhancer:
 
     async def vectorize_job_description(self, enhanced_jd: Dict[str, Any]) -> List[float]:
         """
-        Converts the enhanced job description into a vectorized representation using OpenAI embeddings.
+        Converts the enhanced job description into a vectorized representation using both OpenAI embeddings 
+        and TF-IDF vectorization for increased accuracy.
 
         Args:
             enhanced_jd (Dict[str, Any]): The enhanced job description.
@@ -218,15 +221,45 @@ class JobDescriptionEnhancer:
             List[float]: Vectorized representation of the job description.
         """
         try:
+            # 🚀 **Extract Key Sections from JD**
+            jd_title = enhanced_jd.get("job_title", "")
+            jd_summary = enhanced_jd.get("role_summary", "")
+            jd_responsibilities = ", ".join(enhanced_jd.get("responsibilities", []))
+            jd_skills = ", ".join(enhanced_jd.get("required_skills", []))
+
             jd_text = f"""
-            Job Title: {enhanced_jd.get('job_title', '')}
-            Role Summary: {enhanced_jd.get('role_summary', '')}
-            Responsibilities: {', '.join(enhanced_jd.get('responsibilities', []))}
-            Required Skills: {', '.join(enhanced_jd.get('required_skills', []))}
+            Job Title: {jd_title}
+            Role Summary: {jd_summary}
+            Responsibilities: {jd_responsibilities}
+            Required Skills: {jd_skills}
             """
 
-            vectorized_jd = await self.gpt_service.get_text_embedding(jd_text)
-            return vectorized_jd
+            # 🚀 **Step 1: Get GPT-based Embeddings (Deep Contextual Meaning)**
+            gpt_embedding = await self.gpt_service.get_text_embedding(jd_text)
+            if not gpt_embedding:
+                logger.warning("GPT embedding failed, falling back to TF-IDF only.")
+                return []
+
+            # 🚀 **Step 2: TF-IDF Vectorization (Word-Level Representation)**
+            vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
+            tfidf_matrix = vectorizer.fit_transform([jd_text])
+            tfidf_vector = tfidf_matrix.toarray()[0]  # Convert sparse matrix to dense array
+
+            # 🚀 **Step 3: Combine GPT & TF-IDF Vectors**
+            # Normalize both vectors for better scale consistency
+            gpt_embedding = np.array(gpt_embedding) / np.linalg.norm(gpt_embedding)  # Normalize GPT vector
+            tfidf_vector = tfidf_vector / np.linalg.norm(tfidf_vector)  # Normalize TF-IDF vector
+
+            # Ensure both vectors are of the same length before concatenation
+            if len(gpt_embedding) > len(tfidf_vector):
+                tfidf_vector = np.pad(tfidf_vector, (0, len(gpt_embedding) - len(tfidf_vector)), 'constant')
+            elif len(tfidf_vector) > len(gpt_embedding):
+                gpt_embedding = np.pad(gpt_embedding, (0, len(tfidf_vector) - len(gpt_embedding)), 'constant')
+
+            # 🚀 **Final Combined Vector**
+            final_vector = np.concatenate((gpt_embedding, tfidf_vector))
+
+            return final_vector.tolist()  # Convert NumPy array to a list
 
         except Exception as e:
             logger.error(f"Error vectorizing job description: {str(e)}", exc_info=True)

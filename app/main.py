@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from io import BytesIO
 from typing import List
@@ -99,9 +99,13 @@ async def job_description_enhance(file: UploadFile = File(...)):
 
 ### **Resume Scoring Endpoint**
 @app.post("/api/score-resumes/")
-async def score_resumes(files: List[UploadFile] = File(...)):
+async def score_resumes(
+    files: List[UploadFile] = File(...),
+    user_input: str = Form("")  # Capture additional user input from frontend
+):
     """
-    Endpoint to score multiple resumes against an enhanced job description and sample candidate profiles.
+    Endpoint to score multiple resumes against an enhanced job description and sample candidate profiles,
+    while incorporating additional user preferences.
     """
     try:
         if not files:
@@ -109,7 +113,7 @@ async def score_resumes(files: List[UploadFile] = File(...)):
 
         resume_files = [BytesIO(await file.read()) for file in files]
         filenames = [file.filename for file in files]
-        result = await resume_scoring_service.process_bulk_resumes(resume_files, filenames)
+        result = await resume_scoring_service.process_bulk_resumes(resume_files, filenames, user_input)
         return result
     except Exception as e:
         logger.error(f"Error scoring resumes: {str(e)}", exc_info=True)

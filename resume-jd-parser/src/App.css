@@ -1,6 +1,6 @@
 * {
   box-sizing: border-box;
-  font-family: 'Arial', sans-serif;
+  font-family: "Arial", sans-serif;
 }
 
 body {
@@ -44,7 +44,8 @@ body {
   width: 100%;
 }
 
-.nav-btn.active, .nav-btn:hover {
+.nav-btn.active,
+.nav-btn:hover {
   background: white;
   color: black;
   border-radius: 5px;
@@ -114,6 +115,10 @@ body {
   border-radius: 5px;
   font-size: 14px;
   background: #fff;
+  resize: vertical; /* Allow resizing */
+  white-space: normal; /* Ensures text wraps */
+  word-wrap: break-word; /* Breaks long words properly */
+  overflow-wrap: break-word; /* Ensures long words don't overflow */
 }
 
 .collapsible {

@@ -52,19 +52,17 @@ class ResumeParser:
                 - date_start (string),
                 - date_end (string),
                 - skills (array of strings),
-                - certifications (array of strings),
-                - courses (array of strings),
                 - tasks (array of strings),
-                - languages (array of strings),
-                - interests (array of strings),
                 - company (string)
             7) educations (array of objects, similar to experiences):
                 - key (string),
+                - Insitution (string)
                 - title (string),
                 - description (string),
                 - date_start (string),
                 - date_end (string),
-                - school (string)
+                - skills (string)
+                - tasks (string)
             8) social_urls (array of objects, each with:
                 - type (string),
                 - url (string)

@@ -11,35 +11,25 @@ class DurationDto(BaseModel):
 # 📌 **Experience Schema**
 class ExperienceDto(BaseModel):
     key: str = Field(..., description="Unique identifier for the experience")
-    logo: Optional[str] = Field(None, description="Logo of the company or organization")
+    company: str = Field(..., description="Company name where the experience took place")
     title: Optional[str] = Field(None, description="Job title or position held")
     description: Optional[str] = Field(None, description="Description of responsibilities")
     date_start: Optional[str] = Field(None, description="Start date of the role")
     date_end: Optional[str] = Field(None, description="End date of the role")
     skills: Optional[List[str]] = Field(None, description="Skills gained during the experience")
-    certifications: Optional[List[str]] = Field(None, description="Certifications related to the role")
-    courses: Optional[List[str]] = Field(None, description="Courses completed during the role")
     tasks: Optional[List[str]] = Field(None, description="Key tasks performed in the role")
-    languages: Optional[List[str]] = Field(None, description="Languages used or known in the role")
-    interests: Optional[List[str]] = Field(None, description="Personal interests")
-    company: str = Field(..., description="Company name where the experience took place")
 
 
 # 📌 **Education Schema**
 class EducationDto(BaseModel):
     key: Optional[str] = Field(None, description="Unique identifier for education")
-    logo: Optional[str] = Field(None, description="Logo of the educational institution")
+    Insitution : str = Field(..., description="Name of the school or university")
     title: Optional[str] = Field(None, description="Degree or qualification")
     description: Optional[str] = Field(None, description="Description of the program or course")
     date_start: Optional[str] = Field(None, description="Start date of the education")
     date_end: Optional[str] = Field(None, description="End date of the education")
     skills: Optional[List[str]] = Field(None, description="Skills learned during the course")
-    certifications: Optional[List[str]] = Field(None, description="Certifications related to the education")
-    courses: Optional[List[str]] = Field(None, description="Courses completed during education")
     tasks: Optional[List[str]] = Field(None, description="Tasks or projects undertaken during education")
-    languages: Optional[List[str]] = Field(None, description="Languages known during education")
-    interests: Optional[List[str]] = Field(None, description="Personal interests during education")
-    school: str = Field(..., description="Name of the school or university")
 
 
 # 📌 **Social URLs Schema**
@@ -76,22 +66,19 @@ class ResumeSchema(BaseModel):
 # 📌 **Job Description Schema (for Extraction)**
 class JobDescriptionSchema(BaseModel):
     job_title: str = Field(..., description="Job title for the position")
-    job_description: str = Field(..., description="Full job description text")
-    required_skills: Optional[List[str]] = Field(None, description="List of required skills for the job")
-    min_work_experience: Optional[str] = Field(None, description="Minimum work experience required for the job")
+    job_description: str = Field(..., description="Full job description text without any contextual loss")
+    required_skills: Optional[List[str]] = Field(None, description="List of required skills for the job all mentioned no contextual loss")
+    min_work_experience: Optional[int] = Field(None, description="Minimum work experience required for the job")
 
 
 # 📌 **Enhanced Job Description Schema (for Enhancing Job Descriptions)**
 class EnhancedJobDescriptionSchema(BaseModel):
     job_title: str = Field(..., description="Enhanced job title for better clarity")
-    role_summary: str = Field(..., description="Expanded overview of the role, including its purpose and impact")
-    responsibilities: List[str] = Field(..., description="List of responsibilities for the job, clearly defined and specific")
-    required_skills: List[str] = Field(..., description="Categorized required skills, both technical and non-technical")
-    experience_level: str = Field(..., description="Required experience level for the role, including years of experience")
+    role_summary: str = Field(..., description="Expanded overview of the role, including its purpose and impact in around 500 words minimum no contextual loss")
+    responsibilities: List[str] = Field(..., description="List of responsibilities for the job, clearly defined and specific no contextual loss")
+    required_skills: List[str] = Field(..., description="Categorized required skills, both technical and non-technical, no contextual loss")
+    min_work_experience: Optional[int] = Field(None, description="Minimum work experience required for the job")
     key_metrics: List[str] = Field(..., description="Quantifiable indicators for performance measurement")
-    working_conditions: str = Field(..., description="Description of work environment conditions, such as remote work or travel requirements")
-    growth_opportunities: str = Field(..., description="Details about career progression and development opportunities")
-    company_culture: str = Field(..., description="Overview of the company’s culture, values, and mission")
     vectorized_jd: Optional[List[float]] = Field(None, description="Vectorized representation of the job description for similarity scoring")
 
 
@@ -114,6 +101,7 @@ class CandidateProfileSchemaList(BaseModel):
 class ResumeScoringSchema(BaseModel):
     candidate_name: str = Field(..., description="Name of the candidate extracted from resume")
     resume_score: int = Field(..., description="Score assigned to resume (0-10)")
+    resume_score_justification: str = Field(..., description="Justification of why this assesment is justified")
     gap_analysis: List[str] = Field(..., description="Details on missing skills, experience gaps")
     candidate_summary: str = Field(..., description="A detailed summary of what the candidate possess")
     closest_sample_candidate: str = Field(..., description="Closest matching sample candidate from the generated set")

@@ -37,12 +37,12 @@ class JobDescriptionParser:
             # System Prompt
             system_prompt = f"""
             You are an AI model specialized in extracting structured job descriptions. 
-            Ensure accurate data extraction and return structured JSON output. 
+            Ensure accurate data extraction and return structured JSON output there should be no contextual loss of information everything statedis to be given. 
             Today's date is {today_date}. Follow these rules:
 
             1. **Extract Fields**:
                - job_title: Extract the most relevant job title.
-               - job_description: Provide the full job description text.
+               - job_description: Provide the full job description text without any contextual loss at all with a word limit from 400-500 words.
                - required_skills:
                  a. Identify explicitly mentioned skills.
                  b. Infer essential skills based on job context.
@@ -69,7 +69,7 @@ class JobDescriptionParser:
 
             # User Prompt
             user_prompt = f"""
-            Extract structured job description details from the following text:
+            Extract structured job description details from the following text without contextual loss of any information:
 
             {text}
 

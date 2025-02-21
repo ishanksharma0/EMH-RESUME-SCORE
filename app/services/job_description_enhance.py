@@ -5,7 +5,7 @@ from io import BytesIO
 from sklearn.feature_extraction.text import TfidfVectorizer
 import numpy as np
 from app.utils.logger import Logger
-from app.models.schemas import EnhancedJobDescriptionSchema, CandidateProfileSchemaList
+from app.models.schemas import EnhancedJobDescriptionSchema, CandidateProfileSchemaList, JobDescriptionSchema
 from datetime import datetime
 from typing import List, Dict, Any
 
@@ -38,10 +38,10 @@ class JobDescriptionEnhancer:
         """
         try:
             # Extract the job description
-            extracted_jd = await self.extract_job_description(file_buffer, filename)
+            structured_data = await self.extract_job_description(file_buffer, filename)
 
             # Enhance the job description
-            enhanced_jd = await self.generate_enhanced_jd(extracted_jd)
+            enhanced_jd = await self.generate_enhanced_jd(structured_data)
 
             # Generate 6 Sample Candidates based on enhanced JD
             candidates = await self.generate_candidate_profiles(enhanced_jd)
@@ -66,70 +66,79 @@ class JobDescriptionEnhancer:
 
     async def extract_job_description(self, file_buffer: BytesIO, filename: str) -> Dict[str, Any]:
         """
-        Extracts structured job description data.
-
+        Parses a job description file and extracts structured information.
         Args:
-            file_buffer (BytesIO): Job description file buffer.
-            filename (str): Uploaded job description file name.
-
+            file_buffer (BytesIO): The job description file buffer.
+            filename (str): Name of the uploaded job description file.
+        
         Returns:
-            Dict containing extracted job description details.
+            Dict containing structured job description data.
         """
         try:
-            # Extract text from file
             text = parse_pdf_or_docx(file_buffer, filename)
             today_date = datetime.now().strftime("%Y-%m-%d")
 
+            # System Prompt
             system_prompt = f"""
             You are an AI model specialized in extracting structured job descriptions. 
-            Ensure accurate data extraction and return structured JSON output. 
+            Ensure accurate data extraction and return structured JSON output there should be no contextual loss of information everything statedis to be given. 
             Today's date is {today_date}. Follow these rules:
 
             1. **Extract Fields**:
                - job_title: Extract the most relevant job title.
-               - job_description: Provide the full job description text.
+               - job_description: Provide the full job description text without any contextual loss at all with a word limit from 400-500 words.
                - required_skills:
                  a. Identify explicitly mentioned skills.
                  b. Infer essential skills based on job context.
                - min_work_experience:
                  a. If a minimum experience requirement is stated, extract it.
-                 b. If experience is not explicitly mentioned, infer based on seniority level.
+                 b. If experience is not explicitly mentioned, infer based on seniority level (e.g., 'entry-level' = 0-2 years, 'mid-level' = 3-5 years, 'senior-level' = 6+ years).
 
             2. **Skill Extraction**:
                - Extract both technical and soft skills.
                - Include tools, technologies, and methodologies mentioned.
 
-            3. **Ensure Accuracy**:
+            3. **Work Experience Calculation**:
+               - Ensure the experience field is formatted in numeric terms (e.g., '2 years' or '5+ years').
+               - Infer experience if not explicitly stated using industry norms.
+
+            4. **Ensure Accuracy**:
                - Do not leave fields blank. Provide estimates or mark as 'Not mentioned' where needed.
                - Use contextual inference for missing values.
+
+            5. **Formatting**:
+               - Ensure structured JSON output with no missing fields.
+               - Provide clean, human-readable formatting.
             """
 
+            # User Prompt
             user_prompt = f"""
-            Extract structured job description details from the following text:
+            Extract structured job description details from the following text without contextual loss of any information:
 
             {text}
 
             Ensure structured formatting, extract all key details, and infer missing information where applicable.
             """
 
-            extracted_jd = await self.gpt_service.extract_with_prompts(
+            # Call GPT Service
+            structured_data = await self.gpt_service.extract_with_prompts(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                response_schema=EnhancedJobDescriptionSchema
+                response_schema=JobDescriptionSchema
             )
 
-            return extracted_jd
+            return structured_data
 
         except Exception as e:
-            logger.error(f"Error extracting job description '{filename}': {str(e)}", exc_info=True)
+            logger.error(f"Error parsing job description file '{filename}': {str(e)}", exc_info=True)
             raise
 
-    async def generate_enhanced_jd(self, extracted_jd: Dict[str, Any]) -> Dict[str, Any]:
+    async def generate_enhanced_jd(self, structured_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Enhances extracted job descriptions.
 
         Args:
-            extracted_jd (Dict[str, Any]): Extracted job description details.
+            structured_data (Dict[str, Any]): Extracted job description details.
 
         Returns:
             Dict containing enhanced job description.
@@ -138,6 +147,7 @@ class JobDescriptionEnhancer:
             system_prompt = f"""
             You are an AI expert at refining and enhancing job descriptions.
             Enhance clarity, structure, and detail of job descriptions.
+            ENSURE NO CONTEXTUAL LOSS IS DONE AT ALL.
 
             **Enhancement Guidelines**:
             - Responsibilities: Expand to **at least 10** clear, specific duties.
@@ -149,9 +159,10 @@ class JobDescriptionEnhancer:
             """
 
             user_prompt = f"""
-            Enhance this job description to be more structured and complete:
+            Enhance this job description to be more structured and complete
+            ENSURE NO CONTEXTUAL LOSS IS DONE AT ALL:
 
-            {extracted_jd}
+            {structured_data}
             """
 
             enhanced_jd = await self.gpt_service.extract_with_prompts(

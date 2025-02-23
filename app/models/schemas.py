@@ -79,7 +79,6 @@ class EnhancedJobDescriptionSchema(BaseModel):
     required_skills: List[str] = Field(..., description="Categorized required skills, both technical and non-technical, no contextual loss")
     min_work_experience: Optional[int] = Field(None, description="Minimum work experience required for the job")
     key_metrics: List[str] = Field(..., description="Quantifiable indicators for performance measurement")
-    vectorized_jd: Optional[List[float]] = Field(None, description="Vectorized representation of the job description for similarity scoring")
 
 
 # 📌 **Candidate Profile Schema (for Sample Candidates)**
@@ -106,7 +105,6 @@ class ResumeScoringSchema(BaseModel):
     candidate_summary: str = Field(..., description="A detailed summary of what the candidate possess")
     closest_sample_candidate: str = Field(..., description="Closest matching sample candidate from the generated set")
     recommendations: str = Field(..., description="Improvement recommendations for the candidate")
-    vectorized_similarity: Optional[float] = Field(None, description="Cosine similarity score between resume and JD")
 
 
 # 📌 **Resume Scoring Response (for Bulk Processing)**

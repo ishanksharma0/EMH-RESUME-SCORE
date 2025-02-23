@@ -3,16 +3,60 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Custom styles */
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background-color: #f4f7fc;  /* Light background color */
+/* -----------------------------------------------
+   Custom styles & global resets
+   ----------------------------------------------- */
+
+/* 
+   You can define CSS variables to keep a consistent color scheme 
+   (e.g. for backgrounds, text, etc.). Feel free to adjust or remove. 
+*/
+:root {
+  --background-color: #f4f7fc;
+  --text-color: #212529;
+  --heading-font-size: 1.25rem;
+  --code-bg: #f1f5f9; /* a lighter code block background */
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+/* Global body styling */
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--background-color);
+  color: var(--text-color);
 }
+
+/* Improve code block appearance */
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+  background-color: var(--code-bg);
+  padding: 0.2rem 0.4rem;
+  border-radius: 3px;
+}
+
+/* Optional anchor defaults (if needed) */
+a {
+  color: #3b82f6;  /* Tailwind's 'blue-500' */
+  text-decoration: none;
+}
+a:hover {
+  color: #2563eb; /* 'blue-600' */
+  text-decoration: underline;
+}
+
+/* If you want a global heading style */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--text-color);
+  margin: 0.5rem 0;
+}
+
+/* Additional global utility classes (if desired) */
+/* .centered-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem;
+} */

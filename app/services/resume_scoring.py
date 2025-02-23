@@ -1,15 +1,12 @@
-import tensorflow as tf
 import numpy as np
 from app.utils.file_parser import parse_pdf_or_docx
 from app.services.gpt_service import GPTService
 from app.services.config_service import ConfigService
 from io import BytesIO
 from app.utils.logger import Logger
-from app.models.schemas import ResumeSchema, ResumeScoringSchema, JobDescriptionIndustrySchema, ResumeIndustrySchema
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from app.models.schemas import ResumeSchema, ResumeScoringSchema
 from datetime import datetime
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Any
 
 logger = Logger(__name__).get_logger()
 
@@ -59,7 +56,7 @@ class ResumeScoringService:
                 combined_criteria = f"{user_input}\n\n{enhanced_jd}\n\n{generated_candidates}"
 
                 # **Compare Resume Against User Input > JD > Sample Candidates**
-                resume_comparison = await self.compare_resume_with_criteria(extracted_resume, combined_criteria, generated_candidates)
+                resume_comparison = await self.score_resume(extracted_resume, combined_criteria, generated_candidates)
 
                 # **Store Results**
                 results.append(resume_comparison)
@@ -96,22 +93,19 @@ class ResumeScoringService:
             5) educations_duration (object containing 'years' (number) and 'months' (number)) — Calculate the correct total duration for education.
             6) experiences (array of objects):
                 Each experience must include:
-                - key (string),
                 - title (string),
+                - company (string),
                 - description (string),
                 - date_start (string),
                 - date_end (string),
                 - skills (array of strings),
-                - tasks (array of strings),
-                - company (string)
-            7) educations (array of objects, similar to experiences):
-                - key (string),
-                - Insitution (string)
+                - tasks (array of strings)
+            7) educations (array of objects):
+                - institution (string),
                 - title (string),
-                - description (string),
                 - date_start (string),
                 - date_end (string),
-                - skills (string)
+                - skills (string),
                 - tasks (string)
             8) social_urls (array of objects, each with:
                 - type (string),
@@ -146,12 +140,8 @@ class ResumeScoringService:
             )
 
             if structured_data.get('experiences'):
-                experiences_array = structured_data['experiences']
-                if not isinstance(experiences_array, list):
-                    experiences_array = [experiences_array]
-
                 structured_data['work_experience'] = self.calculate_total_work_experience(
-                    [{'date_start': exp['date_start'], 'date_end': exp['date_end']} for exp in experiences_array]
+                    [{'date_start': exp['date_start'], 'date_end': exp['date_end']} for exp in structured_data['experiences']]
                 )
 
             return structured_data
@@ -160,64 +150,9 @@ class ResumeScoringService:
             logger.error(f"Error extracting resume details: {str(e)}", exc_info=True)
             raise
 
-    async def classify_resume_industry(self, resume: Dict[str, any]) -> str:
+    async def score_resume(self, resume: Dict[str, any], combined_criteria: str, candidates: List[Dict[str, any]]) -> Dict[str, any]:
         """
-        Classifies the industry of a resume based on its extracted content.
-
-        Args:
-            resume (Dict[str, any]): The extracted resume details.
-
-        Returns:
-            str: Industry classification (e.g., "Finance", "Software Engineering").
-        """
-        try:
-            industry_prompt = f"""
-            Analyze the candidate's job roles, skills, and experience. Assign a single industry classification.
-            **Candidate Resume:**
-            {resume}
-
-            Respond with only one industry name.
-            """
-            return await self.gpt_service.extract_with_prompts(
-                system_prompt="You are an expert in job market analysis. Classify the following resume into an industry category.",
-                user_prompt=industry_prompt,
-                response_schema=ResumeIndustrySchema
-            )
-        except Exception as e:
-            logger.error(f"Error classifying resume industry: {str(e)}", exc_info=True)
-            return "Unknown"
-
-    async def classify_jd_industry(self, enhanced_jd: Dict[str, any]) -> str:
-        """
-        Classifies the industry of the job description.
-
-        Args:
-            enhanced_jd (Dict[str, any]): The enhanced job description.
-
-        Returns:
-            str: Industry classification (e.g., "Finance", "Software Engineering").
-        """
-        try:
-            industry_prompt = f"""
-            Analyze the job description and required skills. Assign a single industry classification.
-            **Job Description:**
-            {enhanced_jd}
-
-            Respond with only one industry name.
-            """
-            return await self.gpt_service.extract_with_prompts(
-                system_prompt="You are an expert in job market analysis. Classify the following job description into an industry category.",
-                user_prompt=industry_prompt,
-                response_schema=JobDescriptionIndustrySchema
-            )
-        except Exception as e:
-            logger.error(f"Error classifying job description industry: {str(e)}", exc_info=True)
-            return "Unknown"
-
-
-    async def compare_resume_with_criteria(self, resume: Dict[str, any], combined_criteria: str, candidates: List[Dict[str, any]]) -> Dict[str, any]:
-        """
-        Compares an extracted resume against the combined job criteria.
+        Scores an extracted resume against user input, enhanced JD, and sample candidates.
 
         Args:
             resume (Dict[str, any]): Extracted resume details.
@@ -226,30 +161,6 @@ class ResumeScoringService:
 
         Returns:
             Dict with resume score, analysis, and recommendations.
-        """
-        try:
-            resume_text = f"{resume['skills']} {resume['experiences']} {resume['educations']}"
-
-            # Compute Similarity Using TF-IDF and Cosine Similarity
-            vectorizer = TfidfVectorizer()
-            tfidf_matrix = vectorizer.fit_transform([combined_criteria, resume_text])
-            similarity_score = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
-
-            # Call GPT-Based Resume Scoring
-            gpt_based_scoring = await self.call_gpt_for_scoring(resume, combined_criteria, candidates)
-
-            # Add Similarity Score
-            gpt_based_scoring["similarity_score"] = similarity_score
-
-            return gpt_based_scoring
-
-        except Exception as e:
-            logger.error(f"Error comparing resume: {str(e)}", exc_info=True)
-            raise
-
-    async def call_gpt_for_scoring(self, resume: Dict[str, Any], combined_criteria: str, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Calls GPT-based scoring system for deeper analysis.
         """
         try:
             system_prompt = f"""
@@ -310,113 +221,8 @@ class ResumeScoringService:
             )
 
         except Exception as e:
-            logger.error(f"Error in GPT-based scoring: {str(e)}", exc_info=True)
+            logger.error(f"Error in resume scoring: {str(e)}", exc_info=True)
             raise
-
-    async def compute_similarity(self, jd_text: str, resume_text: str, industry_match: bool, experience_relevance: float) -> float:
-        """
-        Computes similarity between a job description and a resume using multiple vectorization techniques.
-
-        Args:
-            jd_text (str): Job Description text.
-            resume_text (str): Resume text.
-            industry_match (bool): Whether the industries match.
-            experience_relevance (float): Experience alignment score (0-1).
-
-        Returns:
-            float: Weighted similarity score (always between 0 and 1).
-        """
-        try:
-            # 🚀 **Extract Embeddings for GPT-based Semantic Similarity**
-            jd_embedding = await self.gpt_service.get_text_embedding(jd_text)
-            resume_embedding = await self.gpt_service.get_text_embedding(resume_text)
-
-            if not jd_embedding or not resume_embedding:
-                logger.warning("Embedding retrieval failed, returning similarity 0.0")
-                return 0.0  # Fallback if embeddings fail
-
-            # Compute **GPT-based** Cosine Similarity
-            semantic_similarity = 1 - tf.keras.losses.cosine_similarity(
-                tf.convert_to_tensor([jd_embedding], dtype=tf.float32),
-                tf.convert_to_tensor([resume_embedding], dtype=tf.float32)
-            ).numpy()[0]
-
-            semantic_similarity = max(0.0, min(1.0, float(semantic_similarity)))  # Ensure between 0-1
-
-            # 🚀 **TF-IDF Vectorization for Word-Based Similarity**
-            vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
-            tfidf_matrix = vectorizer.fit_transform([jd_text, resume_text])
-            word_similarity = cosine_similarity(tfidf_matrix[0], tfidf_matrix[1])[0][0]
-
-            word_similarity = max(0.0, min(1.0, float(word_similarity)))  # Ensure between 0-1
-
-            # 🚀 **Category-Specific Similarities**
-            categories = ["skills", "experience", "education", "responsibilities"]
-            category_similarities = []
-
-            for category in categories:
-                jd_category_text = self.extract_category_text(jd_text, category)
-                resume_category_text = self.extract_category_text(resume_text, category)
-
-                if jd_category_text and resume_category_text:
-                    category_vectorizer = TfidfVectorizer(stop_words='english', max_features=2000)
-                    category_tfidf_matrix = category_vectorizer.fit_transform([jd_category_text, resume_category_text])
-                    category_similarity = cosine_similarity(category_tfidf_matrix[0], category_tfidf_matrix[1])[0][0]
-                    category_similarities.append(category_similarity)
-                else:
-                    category_similarities.append(0.0)
-
-            # 🚀 **Weighted Similarity Calculation**
-            category_weight = 0.25  # Each category contributes 25% weight
-            total_category_similarity = sum(category_similarities) / len(categories)
-
-            final_similarity = (
-                (0.4 * semantic_similarity) +  # 40% weight to GPT embeddings
-                (0.3 * word_similarity) +  # 30% weight to word similarity
-                (0.3 * total_category_similarity)  # 30% weight to category-specific similarity
-            )
-
-            # 🚀 **Industry and Experience Penalty Adjustment**
-            if not industry_match:
-                industry_penalty = max(0.2, 1 - experience_relevance)
-                final_similarity *= industry_penalty
-
-            # 🚀 **Ensure final similarity remains within 0 and 1**
-            final_similarity = max(0.0, min(1.0, final_similarity))
-
-            logger.info(f"Final computed similarity: {final_similarity:.2f} (Industry: {industry_match}, Experience: {experience_relevance})")
-
-            return round(final_similarity, 2)  # Return similarity rounded to 2 decimal places
-
-        except Exception as e:
-            logger.error(f"Error computing similarity: {str(e)}", exc_info=True)
-            return 0.0
-
-    async def extract_category_text(self, text: str, category: str) -> str:
-        """
-        Extracts relevant category text (skills, experience, education) from a given document.
-        This function uses NLP-based keyword extraction.
-
-        Args:
-            text (str): The full text.
-            category (str): The category to extract (e.g., "skills", "experience", etc.).
-
-        Returns:
-            str: Extracted text related to the category.
-        """
-        keywords = {
-            "skills": ["skills", "technologies", "competencies"],
-            "experience": ["work experience", "professional experience", "employment history"],
-            "education": ["education", "degree", "academic background"],
-            "responsibilities": ["responsibilities", "duties", "tasks"]
-        }
-
-        extracted_sentences = []
-        for line in text.split("\n"):
-            if any(keyword in line.lower() for keyword in keywords.get(category, [])):
-                extracted_sentences.append(line)
-
-        return " ".join(extracted_sentences)
 
     def calculate_total_work_experience(self, experiences: List[Dict[str, str]]) -> Dict[str, int]:
         """

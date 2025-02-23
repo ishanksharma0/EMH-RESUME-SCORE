@@ -2,8 +2,6 @@ from app.utils.file_parser import parse_pdf_or_docx
 from app.services.gpt_service import GPTService
 from app.services.config_service import ConfigService
 from io import BytesIO
-from sklearn.feature_extraction.text import TfidfVectorizer
-import numpy as np
 from app.utils.logger import Logger
 from app.models.schemas import EnhancedJobDescriptionSchema, CandidateProfileSchemaList, JobDescriptionSchema
 from datetime import datetime
@@ -18,23 +16,23 @@ class JobDescriptionEnhancer:
 
     def __init__(self):
         """
-        Initializes the Job Description Enhancer with GPT and OpenAI embeddings for vectorization.
+        Initializes the Job Description Enhancer with GPT.
         """
         logger.info("JobDescriptionEnhancer initialized successfully.")
         config = ConfigService()
         self.gpt_service = GPTService()
-        self.temp_storage = {}  # Temporary storage for enhanced JD, generated candidates, and vectorized JD
+        self.temp_storage = {}  # Temporary storage for enhanced JD and generated candidates
 
     async def enhance_job_description(self, file_buffer: BytesIO, filename: str):
         """
-        Extracts, enhances a job description, generates sample candidate profiles, and vectorizes the JD.
+        Extracts, enhances a job description, and generates sample candidate profiles.
 
         Args:
             file_buffer (BytesIO): The job description file buffer.
             filename (str): Name of the uploaded job description file.
 
         Returns:
-            Dict containing the enhanced job description, generated candidates, and vectorized JD.
+            Dict containing the enhanced job description and generated candidates.
         """
         try:
             # Extract the job description
@@ -46,18 +44,13 @@ class JobDescriptionEnhancer:
             # Generate 6 Sample Candidates based on enhanced JD
             candidates = await self.generate_candidate_profiles(enhanced_jd)
 
-            # Vectorize the Enhanced JD for similarity comparisons
-            vectorized_jd = await self.vectorize_job_description(enhanced_jd)
-
             # Store results in temp storage
             self.temp_storage["enhanced_job_description"] = enhanced_jd
             self.temp_storage["candidates"] = candidates
-            self.temp_storage["vectorized_jd"] = vectorized_jd
 
             return {
                 "enhanced_job_description": enhanced_jd,
-                "generated_candidates": candidates,
-                "vectorized_jd": vectorized_jd
+                "generated_candidates": candidates
             }
 
         except Exception as e:
@@ -81,18 +74,18 @@ class JobDescriptionEnhancer:
             # System Prompt
             system_prompt = f"""
             You are an AI model specialized in extracting structured job descriptions. 
-            Ensure accurate data extraction and return structured JSON output there should be no contextual loss of information everything statedis to be given. 
+            Ensure accurate data extraction and return structured JSON output without any contextual loss of information.
             Today's date is {today_date}. Follow these rules:
 
             1. **Extract Fields**:
                - job_title: Extract the most relevant job title.
-               - job_description: Provide the full job description text without any contextual loss at all with a word limit from 400-500 words.
+               - job_description: Provide the full job description text without any contextual loss, with a word limit of 400-500 words.
                - required_skills:
                  a. Identify explicitly mentioned skills.
                  b. Infer essential skills based on job context.
                - min_work_experience:
                  a. If a minimum experience requirement is stated, extract it.
-                 b. If experience is not explicitly mentioned, infer based on seniority level (e.g., 'entry-level' = 0-2 years, 'mid-level' = 3-5 years, 'senior-level' = 6+ years).
+                 b. If experience is not explicitly mentioned, infer based on seniority level.
 
             2. **Skill Extraction**:
                - Extract both technical and soft skills.
@@ -159,7 +152,7 @@ class JobDescriptionEnhancer:
             """
 
             user_prompt = f"""
-            Enhance this job description to be more structured and complete
+            Enhance this job description to be more structured and complete.
             ENSURE NO CONTEXTUAL LOSS IS DONE AT ALL:
 
             {structured_data}
@@ -219,59 +212,3 @@ class JobDescriptionEnhancer:
         except Exception as e:
             logger.error(f"Error generating candidate profiles: {str(e)}", exc_info=True)
             raise
-
-    async def vectorize_job_description(self, enhanced_jd: Dict[str, Any]) -> List[float]:
-        """
-        Converts the enhanced job description into a vectorized representation using both OpenAI embeddings 
-        and TF-IDF vectorization for increased accuracy.
-
-        Args:
-            enhanced_jd (Dict[str, Any]): The enhanced job description.
-
-        Returns:
-            List[float]: Vectorized representation of the job description.
-        """
-        try:
-            # 🚀 **Extract Key Sections from JD**
-            jd_title = enhanced_jd.get("job_title", "")
-            jd_summary = enhanced_jd.get("role_summary", "")
-            jd_responsibilities = ", ".join(enhanced_jd.get("responsibilities", []))
-            jd_skills = ", ".join(enhanced_jd.get("required_skills", []))
-
-            jd_text = f"""
-            Job Title: {jd_title}
-            Role Summary: {jd_summary}
-            Responsibilities: {jd_responsibilities}
-            Required Skills: {jd_skills}
-            """
-
-            # 🚀 **Step 1: Get GPT-based Embeddings (Deep Contextual Meaning)**
-            gpt_embedding = await self.gpt_service.get_text_embedding(jd_text)
-            if not gpt_embedding:
-                logger.warning("GPT embedding failed, falling back to TF-IDF only.")
-                return []
-
-            # 🚀 **Step 2: TF-IDF Vectorization (Word-Level Representation)**
-            vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
-            tfidf_matrix = vectorizer.fit_transform([jd_text])
-            tfidf_vector = tfidf_matrix.toarray()[0]  # Convert sparse matrix to dense array
-
-            # 🚀 **Step 3: Combine GPT & TF-IDF Vectors**
-            # Normalize both vectors for better scale consistency
-            gpt_embedding = np.array(gpt_embedding) / np.linalg.norm(gpt_embedding)  # Normalize GPT vector
-            tfidf_vector = tfidf_vector / np.linalg.norm(tfidf_vector)  # Normalize TF-IDF vector
-
-            # Ensure both vectors are of the same length before concatenation
-            if len(gpt_embedding) > len(tfidf_vector):
-                tfidf_vector = np.pad(tfidf_vector, (0, len(gpt_embedding) - len(tfidf_vector)), 'constant')
-            elif len(tfidf_vector) > len(gpt_embedding):
-                gpt_embedding = np.pad(gpt_embedding, (0, len(tfidf_vector) - len(gpt_embedding)), 'constant')
-
-            # 🚀 **Final Combined Vector**
-            final_vector = np.concatenate((gpt_embedding, tfidf_vector))
-
-            return final_vector.tolist()  # Convert NumPy array to a list
-
-        except Exception as e:
-            logger.error(f"Error vectorizing job description: {str(e)}", exc_info=True)
-            return []

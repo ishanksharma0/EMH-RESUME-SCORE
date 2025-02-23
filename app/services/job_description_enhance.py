@@ -1,6 +1,7 @@
 from app.utils.file_parser import parse_pdf_or_docx
 from app.services.gpt_service import GPTService
 from app.services.config_service import ConfigService
+from app.services.neo4j_service import Neo4jService  # ✅ Added Neo4j service
 from io import BytesIO
 from app.utils.logger import Logger
 from app.models.schemas import EnhancedJobDescriptionSchema, CandidateProfileSchemaList, JobDescriptionSchema
@@ -16,16 +17,17 @@ class JobDescriptionEnhancer:
 
     def __init__(self):
         """
-        Initializes the Job Description Enhancer with GPT.
+        Initializes the Job Description Enhancer with GPT and Neo4j.
         """
         logger.info("JobDescriptionEnhancer initialized successfully.")
         config = ConfigService()
         self.gpt_service = GPTService()
+        self.neo4j_service = Neo4jService()
         self.temp_storage = {}  # Temporary storage for enhanced JD and generated candidates
 
     async def enhance_job_description(self, file_buffer: BytesIO, filename: str):
         """
-        Extracts, enhances a job description, and generates sample candidate profiles.
+        Extracts, enhances a job description, generates sample candidate profiles, and stores in Neo4j.
 
         Args:
             file_buffer (BytesIO): The job description file buffer.
@@ -43,6 +45,12 @@ class JobDescriptionEnhancer:
 
             # Generate 6 Sample Candidates based on enhanced JD
             candidates = await self.generate_candidate_profiles(enhanced_jd)
+
+            # Store Job Role & Skills in Neo4j
+            job_title = enhanced_jd["job_title"]
+            required_skills = enhanced_jd["required_skills"]
+
+            self.neo4j_service.add_job_role(job_title, "Unknown Industry", required_skills)  # ✅ Store in Neo4j
 
             # Store results in temp storage
             self.temp_storage["enhanced_job_description"] = enhanced_jd

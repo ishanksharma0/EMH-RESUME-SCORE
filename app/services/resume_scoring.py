@@ -1,7 +1,7 @@
-import numpy as np
 from app.utils.file_parser import parse_pdf_or_docx
 from app.services.gpt_service import GPTService
 from app.services.config_service import ConfigService
+from app.services.neo4j_service import Neo4jService  # ✅ Added Neo4j service
 from io import BytesIO
 from app.utils.logger import Logger
 from app.models.schemas import ResumeSchema, ResumeScoringSchema
@@ -24,11 +24,11 @@ class ResumeScoringService:
         config = ConfigService()
         self.gpt_service = GPTService()
         self.job_description_enhancer = job_description_enhancer  # Reference to Enhanced JD & Candidates
+        self.neo4j_service = Neo4jService()  # ✅ Initialize Neo4j connection
 
     async def process_bulk_resumes(self, resume_files: List[BytesIO], filenames: List[str], user_input: str) -> List[Dict[str, any]]:
         """
-        Processes multiple resumes, extracts structured data, and compares them to the enhanced job description 
-        and sample candidates, while incorporating additional user preferences.
+        Processes multiple resumes, extracts structured data, stores in Neo4j, and compares them to the enhanced job description.
 
         Args:
             resume_files (List[BytesIO]): List of resume file buffers.
@@ -52,11 +52,21 @@ class ResumeScoringService:
                 # **Extract Resume Data**
                 extracted_resume = await self.parse_resume(file_buffer, filename)
 
-                # **Combine user input, enhanced JD, and candidates in priority order**
-                combined_criteria = f"{user_input}\n\n{enhanced_jd}\n\n{generated_candidates}"
+                # **Store Candidate Resume in Neo4j**
+                candidate_name = extracted_resume.get("candidate_name", "Unknown")
+                skills = extracted_resume.get("skills", {}).get("primary_skills", [])
+                experience_years = extracted_resume.get("work_experience", {}).get("years", 0)
 
-                # **Compare Resume Against User Input > JD > Sample Candidates**
-                resume_comparison = await self.score_resume(extracted_resume, combined_criteria, generated_candidates)
+                self.neo4j_service.add_candidate_resume(candidate_name, skills, experience_years)  # ✅ Store in Neo4j
+
+                # **Retrieve Relevant Candidates from Neo4j for Comparison**
+                matching_candidates = self.neo4j_service.find_candidates_by_job(enhanced_jd["job_title"])
+
+                # **Combine user input, enhanced JD, and candidates in priority order**
+                combined_criteria = f"{user_input}\n\n{enhanced_jd}\n\n{matching_candidates}"
+
+                # **Compare Resume Against User Input > JD > Neo4j Candidates**
+                resume_comparison = await self.score_resume(extracted_resume, combined_criteria, matching_candidates)
 
                 # **Store Results**
                 results.append(resume_comparison)

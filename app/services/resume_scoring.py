@@ -1,14 +1,24 @@
 from app.utils.file_parser import parse_pdf_or_docx
 from app.services.gpt_service import GPTService
 from app.services.config_service import ConfigService
-from app.services.neo4j_service import Neo4jService  # ✅ Added Neo4j service
+from app.services.neo4j_service import Neo4jService
 from io import BytesIO
 from app.utils.logger import Logger
 from app.models.schemas import ResumeSchema, ResumeScoringSchema
 from datetime import datetime
 from typing import List, Dict, Any
+import numpy as np
 
 logger = Logger(__name__).get_logger()
+
+# Cosine similarity function
+def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
+    """
+    Compute cosine similarity between two vectors.
+    """
+    if not np.any(vec1) or not np.any(vec2):
+        return 0.0
+    return float(np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2)))
 
 class ResumeScoringService:
     """
@@ -24,9 +34,9 @@ class ResumeScoringService:
         config = ConfigService()
         self.gpt_service = GPTService()
         self.job_description_enhancer = job_description_enhancer  # Reference to Enhanced JD & Candidates
-        self.neo4j_service = Neo4jService()  # ✅ Initialize Neo4j connection
+        self.neo4j_service = Neo4jService()  # Initialize Neo4j connection
 
-    async def process_bulk_resumes(self, resume_files: List[BytesIO], filenames: List[str], user_input: str) -> List[Dict[str, any]]:
+    async def process_bulk_resumes(self, resume_files: List[BytesIO], filenames: List[str], user_input: str) -> List[Dict[str, Any]]:
         """
         Processes multiple resumes, extracts structured data, stores in Neo4j, and compares them to the enhanced job description.
 
@@ -68,7 +78,10 @@ class ResumeScoringService:
                 # **Compare Resume Against User Input > JD > Neo4j Candidates**
                 resume_comparison = await self.score_resume(extracted_resume, combined_criteria, matching_candidates)
 
+                similarity_score = await self.compute_similarity(extracted_resume, enhanced_jd)
+
                 # **Store Results**
+                resume_comparison["cosine_similarity"] = similarity_score
                 results.append(resume_comparison)
 
             return results
@@ -77,8 +90,7 @@ class ResumeScoringService:
             logger.error(f"Error processing resumes: {str(e)}", exc_info=True)
             raise
 
-
-    async def parse_resume(self, file_buffer: BytesIO, filename: str) -> Dict[str, any]:
+    async def parse_resume(self, file_buffer: BytesIO, filename: str) -> Dict[str, Any]:
         """
         Parses a resume file and extracts structured information.
 
@@ -160,7 +172,27 @@ class ResumeScoringService:
             logger.error(f"Error extracting resume details: {str(e)}", exc_info=True)
             raise
 
-    async def score_resume(self, resume: Dict[str, any], combined_criteria: str, candidates: List[Dict[str, any]]) -> Dict[str, any]:
+    async def vectorize_resume(self, resume: Dict[str, Any]) -> List[float]:
+        """
+        Vectorizes the resume content for comparison with the job description.
+        """
+        resume_text = (
+            f"{resume.get('candidate_name', '')} "
+            f"{' '.join(resume.get('skills', {}).get('primary_skills', []))} "
+            f"{' '.join([exp.get('description', '') for exp in resume.get('experiences', [])])}"
+        )
+        return await self.gpt_service.get_text_embedding(resume_text)
+
+    async def compute_similarity(self, resume: Dict[str, Any], enhanced_jd: Dict[str, Any]) -> float:
+        """
+        Computes similarity between resume and enhanced job description using cosine similarity.
+        """
+        resume_embedding = await self.vectorize_resume(resume)
+        jd_embedding = self.job_description_enhancer.temp_storage.get("vectorized_jd", [])
+        
+        return cosine_similarity(np.array(jd_embedding), np.array(resume_embedding))
+
+    async def score_resume(self, resume: Dict[str, Any], combined_criteria: str, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Scores an extracted resume against user input, enhanced JD, and sample candidates.
 
@@ -172,67 +204,65 @@ class ResumeScoringService:
         Returns:
             Dict with resume score, analysis, and recommendations.
         """
+        system_prompt = f"""
+        You are an AI tasked with evaluating resumes in relation to an user input (more priority), enhanced job description (second priority) and a set of sample candidates. The candidate's resume should be analyzed thoroughly, including both technical and non-technical aspects, and compared with the job description as well as the dummy candidates.
+
+        Your task is to perform a deep analysis of the candidate's resume and compare it to both the enhanced job description and the sample candidates. Every detail in the resume should be examined carefully, including skills, experiences, education, certifications, and any other relevant information. You need to assess the alignment of the candidate's profile with the job description and the sample candidates.
+
+        The analysis should include:
+        - Identification of any missing skills or experience gaps.
+        - A detailed summary of what the candidate possesses in terms of qualifications, expertise, and suitability for the role.
+        - A comparison of the candidate to the closest matching sample candidate from the generated set.
+        - Recommendations for improvement to help the candidate better match the job description.
+
+        **Scoring Criteria:**
+        1. **Skill Match**: Assess both technical and soft skills mentioned in the resume.
+        2. **Experience Relevance**: Evaluate how well the candidate's past roles and industry experience align with the job description and sample candidates.
+        3. **Education & Certifications**: Check if the candidate's education and certifications match the requirements of the job description.
+        4. **Keyword Similarity**: Analyze the ATS (Applicant Tracking System) optimization by checking how well the resume matches keywords in the job description.
+
+        **Output Format:**
+        - **candidate_name**: Name of the candidate extracted from the resume.
+        - **resume_score**: A score assigned to the resume on a scale from 0 to 10 based on how well it aligns with the job description and sample candidates.
+        - **gap_analysis**: A list of missing skills or experience gaps identified in the candidate's resume.
+        - **candidate_summary**: A detailed summary of the candidate's qualifications, experience, and suitability for the job.
+        - **recommendations**: A set of recommendations for the candidate to improve their alignment with the job description.
+
+        Your task is to analyze the candidate's resume carefully in relation to the enhanced job description and the sample candidates, and generate the report accordingly.
+        """
+
+        user_prompt = f"""
+        Evaluate the following resume against the **Enhanced Job Description** and **Sample Candidates**.
+
+        You are an AI tasked with evaluating resumes in relation to an enhanced job description and a set of sample candidates. The candidate's resume should be analyzed thoroughly, including both technical and non-technical aspects, and compared with the job description as well as the dummy candidates.
+
+        Your task is to perform a deep analysis of the candidate's resume and compare it to both the enhanced job description and the sample candidates. Every detail in the resume should be examined carefully, including skills, experiences, education, certifications, and any other relevant information. You need to assess the alignment of the candidate's profile with the job description and the sample candidates.
+
+        The analysis should include:
+        - Identification of any missing skills or experience gaps.
+        - A detailed summary of what the candidate possesses in terms of qualifications, expertise, and suitability for the role.
+        - A comparison of the candidate to the closest matching sample candidate from the generated set.
+        - Recommendations for improvement to help the candidate better match the job description.
+
+    Resume details: {resume}
+
+    Enhanced Job Description + User Input + Matching Candidates: {combined_criteria}
+
+    Generated Dummy Candidates for comparison: {candidates}
+        """
+
         try:
-            system_prompt = f"""
-            You are an AI tasked with evaluating resumes in relation to an user input (more priority), enhanced job description (second priority) and a set of sample candidates. The candidate's resume should be analyzed thoroughly, including both technical and non-technical aspects, and compared with the job description as well as the dummy candidates.
-
-            Your task is to perform a deep analysis of the candidate's resume and compare it to both the enhanced job description and the sample candidates. Every detail in the resume should be examined carefully, including skills, experiences, education, certifications, and any other relevant information. You need to assess the alignment of the candidate's profile with the job description and the sample candidates.
-
-            The analysis should include:
-            - Identification of any missing skills or experience gaps.
-            - A detailed summary of what the candidate possesses in terms of qualifications, expertise, and suitability for the role.
-            - A comparison of the candidate to the closest matching sample candidate from the generated set.
-            - Recommendations for improvement to help the candidate better match the job description.
-
-            **Scoring Criteria:**
-            1. **Skill Match**: Assess both technical and soft skills mentioned in the resume.
-            2. **Experience Relevance**: Evaluate how well the candidate's past roles and industry experience align with the job description and sample candidates.
-            3. **Education & Certifications**: Check if the candidate's education and certifications match the requirements of the job description.
-            4. **Keyword Similarity**: Analyze the ATS (Applicant Tracking System) optimization by checking how well the resume matches keywords in the job description.
-
-            **Output Format:**
-            - **candidate_name**: Name of the candidate extracted from the resume.
-            - **resume_score**: A score assigned to the resume on a scale from 0 to 10 based on how well it aligns with the job description and sample candidates.
-            - **gap_analysis**: A list of missing skills or experience gaps identified in the candidate's resume.
-            - **candidate_summary**: A detailed summary of the candidate's qualifications, experience, and suitability for the job.
-            - **closest_sample_candidate**: The name of the sample candidate whose profile most closely matches the candidate's.
-            - **recommendations**: A set of recommendations for the candidate to improve their alignment with the job description.
-
-            Your task is to analyze the candidate's resume carefully in relation to the enhanced job description and the sample candidates, and generate the report accordingly.
-            """
-
-            user_prompt = f"""
-            Evaluate the following resume against the **Enhanced Job Description** and **Sample Candidates**.
-
-            You are an AI tasked with evaluating resumes in relation to an enhanced job description and a set of sample candidates. The candidate's resume should be analyzed thoroughly, including both technical and non-technical aspects, and compared with the job description as well as the dummy candidates.
-
-            Your task is to perform a deep analysis of the candidate's resume and compare it to both the enhanced job description and the sample candidates. Every detail in the resume should be examined carefully, including skills, experiences, education, certifications, and any other relevant information. You need to assess the alignment of the candidate's profile with the job description and the sample candidates.
-
-            The analysis should include:
-            - Identification of any missing skills or experience gaps.
-            - A detailed summary of what the candidate possesses in terms of qualifications, expertise, and suitability for the role.
-            - A comparison of the candidate to the closest matching sample candidate from the generated set.
-            - Recommendations for improvement to help the candidate better match the job description.
-
-            **User Input:**
-            {combined_criteria}
-
-            **Candidate Resume:**
-            {resume}
-
-            **Sample Candidates:**
-            {candidates}
-            """
-
-            return await self.gpt_service.extract_with_prompts(
+            # Call GPT service (this will now properly be inside a try block with exception handling)
+            scoring_result = await self.gpt_service.extract_with_prompts(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_schema=ResumeScoringSchema
             )
+            return scoring_result
 
         except Exception as e:
-            logger.error(f"Error in resume scoring: {str(e)}", exc_info=True)
-            raise
+            logger.error(f"Error in scoring resume: {str(e)}", exc_info=True)
+            raise Exception(f"Error in scoring resume: {str(e)}")
 
     def calculate_total_work_experience(self, experiences: List[Dict[str, str]]) -> Dict[str, int]:
         """

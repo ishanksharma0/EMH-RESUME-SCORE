@@ -1,14 +1,21 @@
 from app.utils.file_parser import parse_pdf_or_docx
+from app.services.neo4j_service import Neo4jService
 from app.services.gpt_service import GPTService
 from app.services.config_service import ConfigService
-from app.services.neo4j_service import Neo4jService  # ✅ Added Neo4j service
+from typing import List, Dict, Any
 from io import BytesIO
 from app.utils.logger import Logger
 from app.models.schemas import EnhancedJobDescriptionSchema, CandidateProfileSchemaList, JobDescriptionSchema
 from datetime import datetime
-from typing import List, Dict, Any
+import numpy as np
 
 logger = Logger(__name__).get_logger()
+
+# Cosine similarity function
+def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
+    if not np.any(vec1) or not np.any(vec2):
+        return 0.0
+    return float(np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2)))
 
 class JobDescriptionEnhancer:
     """
@@ -27,14 +34,14 @@ class JobDescriptionEnhancer:
 
     async def enhance_job_description(self, file_buffer: BytesIO, filename: str):
         """
-        Extracts, enhances a job description, generates sample candidate profiles, and stores in Neo4j.
+        Extracts, enhances a job description, generates sample candidate profiles, vectorizes JD, and stores in Neo4j.
 
         Args:
             file_buffer (BytesIO): The job description file buffer.
             filename (str): Name of the uploaded job description file.
 
         Returns:
-            Dict containing the enhanced job description and generated candidates.
+            Dict containing the enhanced job description, generated candidates, and vectorized JD.
         """
         try:
             # Extract the job description
@@ -50,15 +57,18 @@ class JobDescriptionEnhancer:
             job_title = enhanced_jd["job_title"]
             required_skills = enhanced_jd["required_skills"]
 
-            self.neo4j_service.add_job_role(job_title, "Unknown Industry", required_skills)  # ✅ Store in Neo4j
+            # Vectorize job description for similarity comparison
+            vectorized_jd = await self.vectorize_job_description(enhanced_jd)
 
-            # Store results in temp storage
+            # Store the enhanced job description, generated candidates, and vectorized JD
             self.temp_storage["enhanced_job_description"] = enhanced_jd
             self.temp_storage["candidates"] = candidates
+            self.temp_storage["vectorized_jd"] = vectorized_jd
 
             return {
                 "enhanced_job_description": enhanced_jd,
-                "generated_candidates": candidates
+                "generated_candidates": candidates,
+                "vectorized_jd": vectorized_jd
             }
 
         except Exception as e:
@@ -220,3 +230,37 @@ class JobDescriptionEnhancer:
         except Exception as e:
             logger.error(f"Error generating candidate profiles: {str(e)}", exc_info=True)
             raise
+
+    async def vectorize_job_description(self, enhanced_jd: Dict[str, Any]) -> List[float]:
+        """
+        Vectorizes the enhanced job description for similarity comparisons.
+        """
+        try:
+            jd_text = (
+                f"{enhanced_jd.get('job_title', '')} "
+                f"{enhanced_jd.get('role_summary', '')} "
+                f"{' '.join(enhanced_jd.get('responsibilities', []))} "
+                f"{' '.join(enhanced_jd.get('required_skills', []))}"
+            )
+
+            vectorized_jd = await self.gpt_service.get_text_embedding(jd_text)
+            return vectorized_jd
+
+        except Exception as e:
+            logger.error(f"Error vectorizing JD: {str(e)}", exc_info=True)
+            return []
+
+    async def similarity_between_job_descriptions(self, jd_text1: str, jd_text2: str) -> float:
+        """
+        Computes cosine similarity between two job descriptions.
+        """
+        try:
+            embedding1 = await self.gpt_service.get_text_embedding(jd_text1)
+            embedding2 = await self.gpt_service.get_text_embedding(jd_text2)
+
+            similarity = cosine_similarity(np.array(embedding1), np.array(embedding2))
+            return round(similarity, 3)
+
+        except Exception as e:
+            logger.error(f"Error calculating similarity: {str(e)}", exc_info=True)
+            return 0.0

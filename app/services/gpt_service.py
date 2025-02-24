@@ -71,13 +71,13 @@ class GPTService:
 
     async def get_text_embedding(self, text: str) -> List[float]:
         """
-        Generates a vectorized numerical representation of the given text using OpenAI embeddings.
-        
+        Generates a numerical embedding vector for the provided text using OpenAI embeddings.
+
         Args:
-            text (str): The text to convert into an embedding.
+            text (str): The text to embed.
 
         Returns:
-            List[float]: A vector representation of the text.
+            List[float]: A numerical vector representing the embedding.
         """
         try:
             response = self.openai_client.embeddings.create(
@@ -85,9 +85,7 @@ class GPTService:
                 input=text
             )
 
-            # ✅ FIX: Access response as an object, not a dictionary
-            embedding_vector = response.data[0].embedding  # 🔥 Correct way to extract embeddings
-
+            embedding_vector = response.data[0].embedding
             return embedding_vector
 
         except Exception as e:

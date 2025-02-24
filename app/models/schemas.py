@@ -23,7 +23,7 @@ class ExperienceDto(BaseModel):
 # 📌 **Education Schema**
 class EducationDto(BaseModel):
     key: Optional[str] = Field(None, description="Unique identifier for education")
-    Insitution : str = Field(..., description="Name of the school or university")
+    Insitution: str = Field(..., description="Name of the school or university")
     title: Optional[str] = Field(None, description="Degree or qualification")
     description: Optional[str] = Field(None, description="Description of the program or course")
     date_start: Optional[str] = Field(None, description="Start date of the education")
@@ -103,7 +103,6 @@ class ResumeScoringSchema(BaseModel):
     resume_score_justification: str = Field(..., description="Justification of why this assesment is justified")
     gap_analysis: List[str] = Field(..., description="Details on missing skills, experience gaps")
     candidate_summary: str = Field(..., description="A detailed summary of what the candidate possess")
-    closest_sample_candidate: str = Field(..., description="Closest matching sample candidate from the generated set")
     recommendations: str = Field(..., description="Improvement recommendations for the candidate")
 
 

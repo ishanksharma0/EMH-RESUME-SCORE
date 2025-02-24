@@ -21,158 +21,150 @@ class Neo4jService:
         """
         self.driver.close()
 
-    def add_candidate_resume(self, candidate_name: str, skills: list, experience_years: int):
+    def add_industry(self, industry_name: str):
         """
-        Stores a candidate's resume in Neo4j.
-
-        Args:
-            candidate_name (str): Name of the candidate.
-            skills (list): List of skills.
-            experience_years (int): Years of experience.
-        """
-        query = """
-        MERGE (c:Candidate {name: $candidate_name})
-        SET c.experience_years = $experience_years
+        Adds an industry node.
         """
         with self.driver.session() as session:
-            session.run(query, candidate_name=candidate_name, experience_years=experience_years)
+            session.run(
+                "MERGE (i:Industry {name: $name})",
+                name=industry_name
+            )
+        logger.info(f"Industry '{industry_name}' added to Neo4j.")
 
-            for skill in skills:
-                skill_query = """
-                MERGE (s:Skill {name: $skill})
+    def add_job_role(self, industry_name: str, job_title: str):
+        """
+        Adds a job role under a specific industry.
+        """
+        with self.driver.session() as session:
+            session.run(
+                """
+                MATCH (i:Industry {name: $industry_name})
+                MERGE (r:JobRole {title: $job_title})
+                MERGE (i)-[:HAS_JOB_ROLE]->(r)
+                """,
+                industry_name=industry_name,
+                job_title=job_title
+            )
+        logger.info(f"Job Role '{job_title}' added under Industry '{industry_name}'.")
+
+    def add_candidate(self, job_title: str, candidate_name: str):
+        """
+        Adds a candidate to a specific job role and links them.
+        """
+        with self.driver.session() as session:
+            session.run(
+                """
+                MATCH (r:JobRole {title: $job_title})
                 MERGE (c:Candidate {name: $candidate_name})
+                MERGE (c)-[:BELONGS_TO_JOB_ROLE]->(r)
+                """,
+                job_title=job_title,
+                candidate_name=candidate_name
+            )
+        logger.info(f"Candidate '{candidate_name}' added and linked under Job Role '{job_title}'.")
+
+    def add_skill_to_candidate(self, candidate_name: str, skill_name: str):
+        """
+        Adds a skill to a specific candidate.
+        """
+        with self.driver.session() as session:
+            session.run(
+                """
+                MATCH (c:Candidate {name: $candidate_name})
+                MERGE (s:Skill {name: $skill_name})
                 MERGE (c)-[:HAS_SKILL]->(s)
-                """
-                session.run(skill_query, skill=skill, candidate_name=candidate_name)
+                """,
+                candidate_name=candidate_name,
+                skill_name=skill_name
+            )
+        logger.info(f"Skill '{skill_name}' added to Candidate '{candidate_name}'.")
 
-        logger.info(f" Candidate '{candidate_name}' stored in Neo4j.")
-
-    def add_job_role(self, job_title: str, industry: str, required_skills: list):
+    def add_candidate_resume(self, candidate_name: str, skills: list, experience_years: int, job_title: str):
         """
-        Stores a job role in Neo4j.
-
-        Args:
-            job_title (str): Title of the job.
-            industry (str): Industry name.
-            required_skills (list): List of required skills.
-        """
-        query = """
-        MERGE (j:JobRole {title: $job_title})
-        MERGE (i:Industry {name: $industry})
-        MERGE (j)-[:BELONGS_TO]->(i)
+        Adds a resume for a candidate, including skills and experience years, to Neo4j.
+        This method is responsible for adding the uploaded resume data into Neo4j.
         """
         with self.driver.session() as session:
-            session.run(query, job_title=job_title, industry=industry)
-
-            for skill in required_skills:
-                skill_query = """
-                MERGE (s:Skill {name: $skill})
-                MERGE (j:JobRole {title: $job_title})
-                MERGE (j)-[:REQUIRES]->(s)
+            # Add or update candidate's skills
+            for skill in skills:
+                session.run(
+                    """
+                    MATCH (c:Candidate {name: $candidate_name})
+                    MERGE (s:Skill {name: $skill_name})
+                    MERGE (c)-[:HAS_SKILL]->(s)
+                    """,
+                    candidate_name=candidate_name,
+                    skill_name=skill
+                )
+            
+            # Store the candidate's work experience (in years)
+            session.run(
                 """
-                session.run(skill_query, skill=skill, job_title=job_title)
+                MATCH (c:Candidate {name: $candidate_name})
+                SET c.work_experience = $experience_years
+                """,
+                candidate_name=candidate_name,
+                experience_years=experience_years
+            )
 
-        logger.info(f" Job '{job_title}' stored in Neo4j.")
+            # Add candidate to the job role
+            session.run(
+                """
+                MATCH (r:JobRole {title: $job_title})
+                MATCH (c:Candidate {name: $candidate_name})
+                MERGE (c)-[:BELONGS_TO_JOB_ROLE]->(r)
+                """,
+                candidate_name=candidate_name,
+                job_title=job_title
+            )
+        
+        logger.info(f"Candidate '{candidate_name}' with skills and experience added to Neo4j.")
 
-    def find_candidates_by_job(self, job_title: str):
+    def find_candidates_for_job_role(self, job_title: str):
         """
-        Finds candidates that match a given job role.
-
-        Args:
-            job_title (str): The job title to match candidates for.
-
-        Returns:
-            list: A list of matching candidates.
-        """
-        query = """
-        MATCH (j:JobRole {title: $job_title})-[:REQUIRES]->(s:Skill)
-        MATCH (c:Candidate)-[:HAS_SKILL]->(s)
-        RETURN DISTINCT c.name AS candidate_name, c.experience_years AS experience_years
+        Finds all candidates for a specific job role.
         """
         with self.driver.session() as session:
-            result = session.run(query, job_title=job_title)
-            candidates = [{"name": record["candidate_name"], "experience_years": record["experience_years"]} for record in result]
-
-        logger.info(f"🔍 Found {len(candidates)} matching candidates for job '{job_title}'.")
+            result = session.run(
+                """
+                MATCH (r:JobRole {title: $job_title})<-[:BELONGS_TO_JOB_ROLE]-(c:Candidate)
+                RETURN c.name AS candidate_name
+                """,
+                job_title=job_title
+            )
+            candidates = [record["candidate_name"] for record in result]
+        logger.info(f"Found {len(candidates)} candidates for Job Role '{job_title}'.")
         return candidates
 
-    def find_jobs_for_candidate(self, candidate_name: str):
+    def find_skills_for_candidate(self, candidate_name: str):
         """
-        Finds job roles that match a given candidate.
-
-        Args:
-            candidate_name (str): The candidate's name.
-
-        Returns:
-            list: A list of matching jobs.
-        """
-        query = """
-        MATCH (c:Candidate {name: $candidate_name})-[:HAS_SKILL]->(s:Skill)
-        MATCH (j:JobRole)-[:REQUIRES]->(s)
-        RETURN DISTINCT j.title AS job_title
+        Finds all skills for a specific candidate.
         """
         with self.driver.session() as session:
-            result = session.run(query, candidate_name=candidate_name)
-            jobs = [record["job_title"] for record in result]
+            result = session.run(
+                """
+                MATCH (c:Candidate {name: $candidate_name})-[:HAS_SKILL]->(s:Skill)
+                RETURN s.name AS skill_name
+                """,
+                candidate_name=candidate_name
+            )
+            skills = [record["skill_name"] for record in result]
+        logger.info(f"Found {len(skills)} skills for Candidate '{candidate_name}'.")
+        return skills
 
-        logger.info(f"🔍 Found {len(jobs)} matching job roles for candidate '{candidate_name}'.")
-        return jobs
-
-    def list_all_jobs(self):
+    def find_job_roles_for_candidate(self, candidate_name: str):
         """
-        Retrieves all stored job roles from Neo4j.
-
-        Returns:
-            list: A list of all job titles.
+        Finds all job roles associated with a candidate.
         """
-        query = "MATCH (j:JobRole) RETURN j.title AS job_title"
         with self.driver.session() as session:
-            result = session.run(query)
-            jobs = [record["job_title"] for record in result]
-
-        logger.info(f" Retrieved {len(jobs)} job roles from Neo4j.")
-        return jobs
-
-    def list_all_candidates(self):
-        """
-        Retrieves all stored candidates from Neo4j.
-
-        Returns:
-            list: A list of all candidates with their experience.
-        """
-        query = "MATCH (c:Candidate) RETURN c.name AS candidate_name, c.experience_years AS experience_years"
-        with self.driver.session() as session:
-            result = session.run(query)
-            candidates = [{"name": record["candidate_name"], "experience_years": record["experience_years"]} for record in result]
-
-        logger.info(f" Retrieved {len(candidates)} candidates from Neo4j.")
-        return candidates
-
-    def delete_candidate(self, candidate_name: str):
-        """
-        Deletes a candidate and their relationships from Neo4j.
-
-        Args:
-            candidate_name (str): The name of the candidate to delete.
-        """
-        query = "MATCH (c:Candidate {name: $candidate_name}) DETACH DELETE c"
-        with self.driver.session() as session:
-            session.run(query, candidate_name=candidate_name)
-
-        logger.info(f" Deleted candidate '{candidate_name}' from Neo4j.")
-
-    def delete_job(self, job_title: str):
-        """
-        Deletes a job role and its relationships from Neo4j.
-
-        Args:
-            job_title (str): The title of the job to delete.
-        """
-        query = "MATCH (j:JobRole {title: $job_title}) DETACH DELETE j"
-        with self.driver.session() as session:
-            session.run(query, job_title=job_title)
-
-        logger.info(f" Deleted job role '{job_title}' from Neo4j.")
-
-# ✅ Initialize Neo4j service for use in the application
-neo4j_service = Neo4jService()
+            result = session.run(
+                """
+                MATCH (c:Candidate {name: $candidate_name})-[:BELONGS_TO_JOB_ROLE]->(r:JobRole)
+                RETURN r.title AS job_title
+                """,
+                candidate_name=candidate_name
+            )
+            job_roles = [record["job_title"] for record in result]
+        logger.info(f"Found {len(job_roles)} Job Roles for Candidate '{candidate_name}'.")
+        return job_roles

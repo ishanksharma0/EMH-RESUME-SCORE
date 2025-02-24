@@ -67,6 +67,7 @@ class ResumeSchema(BaseModel):
 class JobDescriptionSchema(BaseModel):
     job_title: str = Field(..., description="Job title for the position")
     job_description: str = Field(..., description="Full job description text without any contextual loss")
+    industry_name: str = Field(..., description="Job industry of the job finances, technological, civil, healthcare, etc, without any contextual loss")
     required_skills: Optional[List[str]] = Field(None, description="List of required skills for the job all mentioned no contextual loss")
     min_work_experience: Optional[int] = Field(None, description="Minimum work experience required for the job")
 
@@ -74,6 +75,7 @@ class JobDescriptionSchema(BaseModel):
 # 📌 **Enhanced Job Description Schema (for Enhancing Job Descriptions)**
 class EnhancedJobDescriptionSchema(BaseModel):
     job_title: str = Field(..., description="Enhanced job title for better clarity")
+    industry_name: str = Field(..., description="Job industry of the job finances, technological, civil, healthcare, etc, without any contextual loss")
     role_summary: str = Field(..., description="Expanded overview of the role, including its purpose and impact in around 500 words minimum no contextual loss")
     responsibilities: List[str] = Field(..., description="List of responsibilities for the job, clearly defined and specific no contextual loss")
     required_skills: List[str] = Field(..., description="Categorized required skills, both technical and non-technical, no contextual loss")

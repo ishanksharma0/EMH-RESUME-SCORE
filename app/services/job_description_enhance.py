@@ -35,13 +35,6 @@ class JobDescriptionEnhancer:
     async def enhance_job_description(self, file_buffer: BytesIO, filename: str):
         """
         Extracts, enhances a job description, generates sample candidate profiles, vectorizes JD, and stores in Neo4j.
-
-        Args:
-            file_buffer (BytesIO): The job description file buffer.
-            filename (str): Name of the uploaded job description file.
-
-        Returns:
-            Dict containing the enhanced job description, generated candidates, and vectorized JD.
         """
         try:
             # Extract the job description
@@ -50,12 +43,35 @@ class JobDescriptionEnhancer:
             # Enhance the job description
             enhanced_jd = await self.generate_enhanced_jd(structured_data)
 
-            # Generate 6 Sample Candidates based on enhanced JD
+            # Generate Sample Candidates based on enhanced JD
             candidates = await self.generate_candidate_profiles(enhanced_jd)
 
             # Store Job Role & Skills in Neo4j
-            job_title = enhanced_jd["job_title"]
-            required_skills = enhanced_jd["required_skills"]
+            industry_name = enhanced_jd.get("industry_name")
+            job_title = enhanced_jd.get("job_title")
+
+            # Add Industry to Neo4j (if not exists)
+            self.neo4j_service.add_industry(industry_name)
+
+            # Add Job Role to Neo4j under the correct Industry
+            self.neo4j_service.add_job_role(industry_name, job_title)
+
+            # Ensure candidates' skills exist and add them
+            for candidate in candidates['candidate_list']:
+                candidate_name = candidate['full_name']
+                self.neo4j_service.add_candidate(job_title, candidate_name)
+
+                # Ensure primary_skills and secondary_skills are initialized as empty lists if None
+                primary_skills = candidate.get('key_skills', {}).get('primary_skills', [])
+                secondary_skills = candidate.get('key_skills', {}).get('secondary_skills', [])
+
+                # Add primary skills to Neo4j
+                for skill in primary_skills or []:  # Using or to ensure it defaults to an empty list if None
+                    self.neo4j_service.add_skill_to_candidate(candidate_name, skill)
+
+                # Add secondary skills to Neo4j
+                for skill in secondary_skills or []:  # Same handling for secondary_skills
+                    self.neo4j_service.add_skill_to_candidate(candidate_name, skill)
 
             # Vectorize job description for similarity comparison
             vectorized_jd = await self.vectorize_job_description(enhanced_jd)
@@ -96,6 +112,7 @@ class JobDescriptionEnhancer:
             Today's date is {today_date}. Follow these rules:
 
             1. **Extract Fields**:
+               - **industry_name**: Extract the industry of the job (e.g., "Technology", "Healthcare", "Finance"). If not mentioned, mark as "Not mentioned". 
                - job_title: Extract the most relevant job title.
                - job_description: Provide the full job description text without any contextual loss, with a word limit of 400-500 words.
                - required_skills:
@@ -240,7 +257,7 @@ class JobDescriptionEnhancer:
                 f"{enhanced_jd.get('job_title', '')} "
                 f"{enhanced_jd.get('role_summary', '')} "
                 f"{' '.join(enhanced_jd.get('responsibilities', []))} "
-                f"{' '.join(enhanced_jd.get('required_skills', []))}"
+                f"{' '.join(enhanced_jd.get('required_skills', []))} "
             )
 
             vectorized_jd = await self.gpt_service.get_text_embedding(jd_text)
@@ -249,18 +266,3 @@ class JobDescriptionEnhancer:
         except Exception as e:
             logger.error(f"Error vectorizing JD: {str(e)}", exc_info=True)
             return []
-
-    async def similarity_between_job_descriptions(self, jd_text1: str, jd_text2: str) -> float:
-        """
-        Computes cosine similarity between two job descriptions.
-        """
-        try:
-            embedding1 = await self.gpt_service.get_text_embedding(jd_text1)
-            embedding2 = await self.gpt_service.get_text_embedding(jd_text2)
-
-            similarity = cosine_similarity(np.array(embedding1), np.array(embedding2))
-            return round(similarity, 3)
-
-        except Exception as e:
-            logger.error(f"Error calculating similarity: {str(e)}", exc_info=True)
-            return 0.0

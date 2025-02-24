@@ -62,15 +62,36 @@ class ResumeScoringService:
                 # **Extract Resume Data**
                 extracted_resume = await self.parse_resume(file_buffer, filename)
 
+                # **Log the extracted resume data**
+                logger.info(f"Extracted resume for candidate: {extracted_resume.get('candidate_name')} with skills: {extracted_resume.get('skills')}")
+
                 # **Store Candidate Resume in Neo4j**
                 candidate_name = extracted_resume.get("candidate_name", "Unknown")
                 skills = extracted_resume.get("skills", {}).get("primary_skills", [])
+                skills += extracted_resume.get("skills", {}).get("secondary_skills", [])
                 experience_years = extracted_resume.get("work_experience", {}).get("years", 0)
 
-                self.neo4j_service.add_candidate_resume(candidate_name, skills, experience_years)  # ✅ Store in Neo4j
+                # Add Industry to Neo4j (if not exists) - Assuming job title is tied to an industry
+                industry_name = enhanced_jd.get("industry_name")
+                job_title = enhanced_jd.get("job_title")
+
+                # Add Industry and Job Role to Neo4j
+                self.neo4j_service.add_industry(industry_name)
+                self.neo4j_service.add_job_role(industry_name, job_title)
+
+                # **Add Candidate to Neo4j**
+                self.neo4j_service.add_candidate(job_title, candidate_name)
+
+                # **Ensure skills exist before trying to add them**
+                if skills:
+                    for skill in skills:
+                        self.neo4j_service.add_skill_to_candidate(candidate_name, skill)
+
+                # Optionally, log that the candidate was successfully added to Neo4j
+                logger.info(f"Successfully added candidate '{candidate_name}' to Neo4j under job role '{job_title}'.")
 
                 # **Retrieve Relevant Candidates from Neo4j for Comparison**
-                matching_candidates = self.neo4j_service.find_candidates_by_job(enhanced_jd["job_title"])
+                matching_candidates = self.neo4j_service.find_candidates_for_job_role(enhanced_jd["job_title"])
 
                 # **Combine user input, enhanced JD, and candidates in priority order**
                 combined_criteria = f"{user_input}\n\n{enhanced_jd}\n\n{matching_candidates}"
@@ -192,7 +213,7 @@ class ResumeScoringService:
         
         return cosine_similarity(np.array(jd_embedding), np.array(resume_embedding))
 
-    async def score_resume(self, resume: Dict[str, Any], combined_criteria: str, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def score_resume(self, resume: Dict[str, Any], combined_criteria: str, generated_candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Scores an extracted resume against user input, enhanced JD, and sample candidates.
 
@@ -248,7 +269,7 @@ class ResumeScoringService:
 
     Enhanced Job Description + User Input + Matching Candidates: {combined_criteria}
 
-    Generated Dummy Candidates for comparison: {candidates}
+    Generated Dummy Candidates for comparison: {generated_candidates}
         """
 
         try:

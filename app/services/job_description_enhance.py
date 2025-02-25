@@ -11,7 +11,6 @@ import numpy as np
 
 logger = Logger(__name__).get_logger()
 
-# Cosine similarity function
 def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
     if not np.any(vec1) or not np.any(vec2):
         return 0.0
@@ -21,62 +20,88 @@ class JobDescriptionEnhancer:
     """
     Service for extracting and enhancing job descriptions, followed by generating sample candidate profiles.
     """
-
     def __init__(self):
-        """
-        Initializes the Job Description Enhancer with GPT and Neo4j.
-        """
         logger.info("JobDescriptionEnhancer initialized successfully.")
         config = ConfigService()
         self.gpt_service = GPTService()
         self.neo4j_service = Neo4jService()
         self.temp_storage = {}  # Temporary storage for enhanced JD and generated candidates
 
+    def map_experience_to_bucket(self, years: int) -> str:
+        if years < 1:
+            return "0-1"
+        elif years < 2:
+            return "1-2"
+        elif years < 4:
+            return "2-4"
+        elif years < 8:
+            return "4-8"
+        elif years < 16:
+            return "8-16"
+        else:
+            return "16+"
+
     async def enhance_job_description(self, file_buffer: BytesIO, filename: str):
         """
-        Extracts, enhances a job description, generates sample candidate profiles, vectorizes JD, and stores in Neo4j.
+        Extracts, enhances a job description, generates sample candidate profiles, 
+        vectorizes the JD, and stores them in Neo4j using the structure:
+        Finances -> Risk Advisory & Internal Auditor -> Skill -> SubSkill -> Candidate
         """
         try:
-            # Extract the job description
+            # 1) Extract job description
             structured_data = await self.extract_job_description(file_buffer, filename)
 
-            # Enhance the job description
+            # 2) Enhance the job description
             enhanced_jd = await self.generate_enhanced_jd(structured_data)
 
-            # Generate Sample Candidates based on enhanced JD
+            # Force fixed Industry and Job Role
+            enhanced_jd["industry_name"] = "Finances"
+            enhanced_jd["job_title"] = "Risk Advisory & Internal Auditor"
+
+            # 3) Generate 6 sample candidates
             candidates = await self.generate_candidate_profiles(enhanced_jd)
 
-            # Store Job Role & Skills in Neo4j
-            industry_name = enhanced_jd.get("industry_name")
-            job_title = enhanced_jd.get("job_title")
+            # Ensure Industry and Job Role exist
+            self.neo4j_service.add_industry("Finances")
+            self.neo4j_service.add_job_role("Finances", "Risk Advisory & Internal Auditor")
 
-            # Add Industry to Neo4j (if not exists)
-            self.neo4j_service.add_industry(industry_name)
+            # Process each generated dummy candidate
+            for c in candidates.get("candidate_list", []):
+                if c is None or not isinstance(c, dict):
+                    logger.error(f"Skipping invalid candidate entry: {c}")
+                    continue
+                experience_data = c.get("experience")
+                if experience_data is None or not isinstance(experience_data, dict):
+                    logger.error(f"Skipping candidate {c.get('full_name', 'Unknown Candidate')}: Missing or invalid experience data")
+                    continue
+                candidate_name = c.get("full_name", "Unknown Candidate")
+                candidate_score = c.get("score", 0)
+                experience_years = experience_data.get("years", 0)
+                # (Experience bucket is used here only for node creation of Skill/SubSkill)
+                experience_bucket = self.map_experience_to_bucket(experience_years)
+                self.neo4j_service.create_experience_node(experience_bucket)
 
-            # Add Job Role to Neo4j under the correct Industry
-            self.neo4j_service.add_job_role(industry_name, job_title)
+                # Create candidate node with overall score
+                self.neo4j_service.create_candidate(candidate_name, candidate_score)
 
-            # Ensure candidates' skills exist and add them
-            for candidate in candidates['candidate_list']:
-                candidate_name = candidate['full_name']
-                self.neo4j_service.add_candidate(job_title, candidate_name)
+                # Combine primary and secondary skills into a mapping
+                primary_skills = c.get("key_skills", {}).get("primary_skills", [])
+                secondary_skills = c.get("key_skills", {}).get("secondary_skills", [])
+                combined_skills = self.map_skills_to_skills_and_subskills(primary_skills, secondary_skills)
 
-                # Ensure primary_skills and secondary_skills are initialized as empty lists if None
-                primary_skills = candidate.get('key_skills', {}).get('primary_skills', [])
-                secondary_skills = candidate.get('key_skills', {}).get('secondary_skills', [])
+                for skill_info in combined_skills:
+                    skill_name = skill_info['skill']
+                    self.neo4j_service.add_skill(experience_bucket, skill_name)
+                    for subskill_info in skill_info['subskills']:
+                        subskill_name = subskill_info['subskill']
+                        self.neo4j_service.create_subskill_under_skill(experience_bucket, skill_name, subskill_name)
+                        # Link candidate to subskill (only once with overall candidate score)
+                        self.neo4j_service.link_candidate_to_subskill(candidate_name, subskill_name)
 
-                # Add primary skills to Neo4j
-                for skill in primary_skills or []:  # Using or to ensure it defaults to an empty list if None
-                    self.neo4j_service.add_skill_to_candidate(candidate_name, skill)
-
-                # Add secondary skills to Neo4j
-                for skill in secondary_skills or []:  # Same handling for secondary_skills
-                    self.neo4j_service.add_skill_to_candidate(candidate_name, skill)
-
-            # Vectorize job description for similarity comparison
+            # Vectorize the enhanced job description
             vectorized_jd = await self.vectorize_job_description(enhanced_jd)
 
-            # Store the enhanced job description, generated candidates, and vectorized JD
+            # Store outputs in temporary storage
             self.temp_storage["enhanced_job_description"] = enhanced_jd
             self.temp_storage["candidates"] = candidates
             self.temp_storage["vectorized_jd"] = vectorized_jd
@@ -89,23 +114,12 @@ class JobDescriptionEnhancer:
 
         except Exception as e:
             logger.error(f"Error enhancing job description '{filename}': {str(e)}", exc_info=True)
-            raise
+            raise Exception(f"Error enhancing job description '{filename}': {str(e)}")
 
     async def extract_job_description(self, file_buffer: BytesIO, filename: str) -> Dict[str, Any]:
-        """
-        Parses a job description file and extracts structured information.
-        Args:
-            file_buffer (BytesIO): The job description file buffer.
-            filename (str): Name of the uploaded job description file.
-        
-        Returns:
-            Dict containing structured job description data.
-        """
         try:
             text = parse_pdf_or_docx(file_buffer, filename)
             today_date = datetime.now().strftime("%Y-%m-%d")
-
-            # System Prompt
             system_prompt = f"""
             You are an AI model specialized in extracting structured job descriptions. 
             Ensure accurate data extraction and return structured JSON output without any contextual loss of information.
@@ -138,8 +152,6 @@ class JobDescriptionEnhancer:
                - Ensure structured JSON output with no missing fields.
                - Provide clean, human-readable formatting.
             """
-
-            # User Prompt
             user_prompt = f"""
             Extract structured job description details from the following text without contextual loss of any information:
 
@@ -147,30 +159,35 @@ class JobDescriptionEnhancer:
 
             Ensure structured formatting, extract all key details, and infer missing information where applicable.
             """
-
-            # Call GPT Service
             structured_data = await self.gpt_service.extract_with_prompts(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_schema=JobDescriptionSchema
             )
-
             return structured_data
-
         except Exception as e:
-            logger.error(f"Error parsing job description file '{filename}': {str(e)}", exc_info=True)
+            logger.error(f"Error parsing job description '{filename}': {str(e)}", exc_info=True)
             raise
 
+    def map_skills_to_skills_and_subskills(self, primary_skills: List[str], secondary_skills: List[str]) -> List[Dict[str, Any]]:
+        """
+        Combines primary and secondary skills into a single mapping where each skill becomes a higher-level skill,
+        and every other skill becomes its subskill.
+        """
+        all_skills = primary_skills + secondary_skills
+        results = []
+        for skill in all_skills:
+            subskills = []
+            for other_skill in all_skills:
+                if other_skill != skill:
+                    subskills.append({'subskill': other_skill})
+            results.append({
+                'skill': skill,
+                'subskills': subskills
+            })
+        return results
+
     async def generate_enhanced_jd(self, structured_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Enhances extracted job descriptions.
-
-        Args:
-            structured_data (Dict[str, Any]): Extracted job description details.
-
-        Returns:
-            Dict containing enhanced job description.
-        """
         try:
             system_prompt = f"""
             You are an AI expert at refining and enhancing job descriptions.
@@ -185,36 +202,23 @@ class JobDescriptionEnhancer:
 
             Format the output in structured JSON format.
             """
-
             user_prompt = f"""
             Enhance this job description to be more structured and complete.
             ENSURE NO CONTEXTUAL LOSS IS DONE AT ALL:
 
             {structured_data}
             """
-
             enhanced_jd = await self.gpt_service.extract_with_prompts(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_schema=EnhancedJobDescriptionSchema
             )
-
             return enhanced_jd
-
         except Exception as e:
-            logger.error(f"Error generating enhanced job description: {str(e)}", exc_info=True)
+            logger.error(f"Error enhancing job description: {str(e)}", exc_info=True)
             raise
 
     async def generate_candidate_profiles(self, enhanced_jd: Dict[str, Any]) -> CandidateProfileSchemaList:
-        """
-        Generates sample candidate profiles based on the enhanced job description.
-
-        Args:
-            enhanced_jd (Dict[str, Any]): The enhanced job description.
-
-        Returns:
-            CandidateProfileSchemaList: List of sample candidate profiles.
-        """
         try:
             system_prompt = f"""
             Generate six candidate profiles with varying qualification levels for the given job description.
@@ -229,29 +233,22 @@ class JobDescriptionEnhancer:
 
             Structure output as JSON.
             """
-
             user_prompt = f"""
             Generate sample candidates for this job description:
 
             {enhanced_jd}
             """
-
             candidates = await self.gpt_service.extract_with_prompts(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_schema=CandidateProfileSchemaList
             )
-
             return candidates
-
         except Exception as e:
             logger.error(f"Error generating candidate profiles: {str(e)}", exc_info=True)
             raise
 
     async def vectorize_job_description(self, enhanced_jd: Dict[str, Any]) -> List[float]:
-        """
-        Vectorizes the enhanced job description for similarity comparisons.
-        """
         try:
             jd_text = (
                 f"{enhanced_jd.get('job_title', '')} "
@@ -259,10 +256,8 @@ class JobDescriptionEnhancer:
                 f"{' '.join(enhanced_jd.get('responsibilities', []))} "
                 f"{' '.join(enhanced_jd.get('required_skills', []))} "
             )
-
             vectorized_jd = await self.gpt_service.get_text_embedding(jd_text)
             return vectorized_jd
-
         except Exception as e:
             logger.error(f"Error vectorizing JD: {str(e)}", exc_info=True)
             return []

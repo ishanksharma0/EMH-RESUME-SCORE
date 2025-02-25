@@ -11,99 +11,117 @@ import numpy as np
 
 logger = Logger(__name__).get_logger()
 
-# Cosine similarity function
+# Cosine similarity function remains unchanged
 def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
-    """
-    Compute cosine similarity between two vectors.
-    """
     if not np.any(vec1) or not np.any(vec2):
         return 0.0
     return float(np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2)))
 
 class ResumeScoringService:
     """
-    Service for extracting structured resume details, scoring resumes against the enhanced job description 
-    and sample candidates, and returning a structured comparison report.
+    Service for extracting structured resume details, scoring resumes against the enhanced job description, 
+    and returning a structured comparison report.
     """
 
     def __init__(self, job_description_enhancer):
-        """
-        Initializes the Resume Scoring Service with GPT integration.
-        """
         logger.info("ResumeScoringService initialized successfully.")
         config = ConfigService()
         self.gpt_service = GPTService()
-        self.job_description_enhancer = job_description_enhancer  # Reference to Enhanced JD & Candidates
-        self.neo4j_service = Neo4jService()  # Initialize Neo4j connection
+        self.job_description_enhancer = job_description_enhancer
+        self.neo4j_service = Neo4jService()
+
+    def map_experience_to_bucket(self, years: int) -> str:
+        if years < 1:
+            return "0-1"
+        elif years < 2:
+            return "1-2"
+        elif years < 4:
+            return "2-4"
+        elif years < 8:
+            return "4-8"
+        elif years < 16:
+            return "8-16"
+        else:
+            return "16+"
+
+    def map_skills_to_skills_and_subskills(self, primary_skills: List[str], secondary_skills: List[str]) -> List[Dict[str, Any]]:
+        """
+        Combines both primary and secondary skills into a single mapping where each skill becomes a higher‐level skill
+        and every other skill becomes its subskill.
+        """
+        all_skills = primary_skills + secondary_skills
+        results = []
+        for skill in all_skills:
+            subskills = []
+            for other_skill in all_skills:
+                if other_skill != skill:
+                    subskills.append({'subskill': other_skill})
+            results.append({'skill': skill, 'subskills': subskills})
+        return results
 
     async def process_bulk_resumes(self, resume_files: List[BytesIO], filenames: List[str], user_input: str) -> List[Dict[str, Any]]:
         """
-        Processes multiple resumes, extracts structured data, stores in Neo4j, and compares them to the enhanced job description.
-
-        Args:
-            resume_files (List[BytesIO]): List of resume file buffers.
-            filenames (List[str]): Corresponding filenames.
-            user_input (str): Additional input provided by the user.
-
-        Returns:
-            List of structured resume analysis results with scores and comparisons.
+        Processes multiple uploaded resumes:
+         - Parses and scores each resume (using overall resume score only)
+         - Creates candidate nodes using fixed Industry 'Finances' and Job Role 'Risk Advisory & Internal Auditor'
+         - Combines primary and secondary skills into higher-level skills and subskills
+         - Links each candidate to every subskill (using the overall resume score)
+         - (Optional) Retrieves matching candidates that meet all conditions (Industry, Job Role, Experience, Skill, SubSkill)
+         - Returns a list of scoring results for each resume.
         """
         try:
+            # Ensure that the enhanced JD and dummy candidates have been generated already
             if "enhanced_job_description" not in self.job_description_enhancer.temp_storage:
                 raise ValueError("Enhanced Job Description not found. Run /api/job-description-enhance first.")
 
             enhanced_jd = self.job_description_enhancer.temp_storage["enhanced_job_description"]
             generated_candidates = self.job_description_enhancer.temp_storage["candidates"]
 
+            fixed_industry = "Finances"
+            fixed_job_role = "Risk Advisory & Internal Auditor"
+
+            # Ensure Industry and Job Role exist
+            self.neo4j_service.add_industry(fixed_industry)
+            self.neo4j_service.add_job_role(fixed_industry, fixed_job_role)
+
             results = []
+
             for file_buffer, filename in zip(resume_files, filenames):
-                logger.info(f"Processing resume file: {filename}")
-
-                # **Extract Resume Data**
                 extracted_resume = await self.parse_resume(file_buffer, filename)
-
-                # **Log the extracted resume data**
-                logger.info(f"Extracted resume for candidate: {extracted_resume.get('candidate_name')} with skills: {extracted_resume.get('skills')}")
-
-                # **Store Candidate Resume in Neo4j**
                 candidate_name = extracted_resume.get("candidate_name", "Unknown")
-                skills = extracted_resume.get("skills", {}).get("primary_skills", [])
-                skills += extracted_resume.get("skills", {}).get("secondary_skills", [])
                 experience_years = extracted_resume.get("work_experience", {}).get("years", 0)
+                experience_bucket = self.map_experience_to_bucket(experience_years)
 
-                # Add Industry to Neo4j (if not exists) - Assuming job title is tied to an industry
-                industry_name = enhanced_jd.get("industry_name")
-                job_title = enhanced_jd.get("job_title")
+                # Create the Experience node
+                self.neo4j_service.create_experience_node(experience_bucket)
 
-                # Add Industry and Job Role to Neo4j
-                self.neo4j_service.add_industry(industry_name)
-                self.neo4j_service.add_job_role(industry_name, job_title)
+                # Compute overall resume score once for the uploaded resume
+                combined_criteria = f"{user_input}\n\n{enhanced_jd}\n\n{generated_candidates}"
+                resume_scoring = await self.score_resume(extracted_resume, combined_criteria, generated_candidates)
+                overall_resume_score = resume_scoring.get("resume_score", 0)
 
-                # **Add Candidate to Neo4j**
-                self.neo4j_service.add_candidate(job_title, candidate_name)
+                # Create candidate node with overall resume score
+                self.neo4j_service.create_candidate(candidate_name, overall_resume_score)
 
-                # **Ensure skills exist before trying to add them**
-                if skills:
-                    for skill in skills:
-                        self.neo4j_service.add_skill_to_candidate(candidate_name, skill)
+                # Extract combined skills from the resume
+                primary_skills = extracted_resume.get("skills", {}).get("primary_skills", [])
+                secondary_skills = extracted_resume.get("skills", {}).get("secondary_skills", [])
+                combined_skills = self.map_skills_to_skills_and_subskills(primary_skills, secondary_skills)
 
-                # Optionally, log that the candidate was successfully added to Neo4j
-                logger.info(f"Successfully added candidate '{candidate_name}' to Neo4j under job role '{job_title}'.")
+                # For each combined skill, add skill and subskill nodes and link candidate to each subskill
+                for skill_info in combined_skills:
+                    skill_name = skill_info['skill']
+                    self.neo4j_service.add_skill(experience_bucket, skill_name)
+                    for subskill_info in skill_info['subskills']:
+                        subskill_name = subskill_info['subskill']
+                        self.neo4j_service.create_subskill_under_skill(experience_bucket, skill_name, subskill_name)
+                        # Link candidate to subskill using overall resume score
+                        self.neo4j_service.link_candidate_to_subskill(candidate_name, subskill_name)
 
-                # **Retrieve Relevant Candidates from Neo4j for Comparison**
-                matching_candidates = self.neo4j_service.find_candidates_for_job_role(enhanced_jd["job_title"])
+                results.append(resume_scoring)
 
-                # **Combine user input, enhanced JD, and candidates in priority order**
-                combined_criteria = f"{user_input}\n\n{enhanced_jd}\n\n{matching_candidates}"
-
-                # **Compare Resume Against User Input > JD > Neo4j Candidates**
-                resume_comparison = await self.score_resume(extracted_resume, combined_criteria, matching_candidates)
-
-                similarity_score = await self.compute_similarity(extracted_resume, enhanced_jd)
-
-                # **Store Results**
-                resume_comparison["cosine_similarity"] = similarity_score
-                results.append(resume_comparison)
+                similarity = await self.compute_similarity(extracted_resume, enhanced_jd)
+                resume_scoring["cosine_similarity"] = similarity
 
             return results
 
@@ -125,7 +143,6 @@ class ResumeScoringService:
         try:
             text = parse_pdf_or_docx(file_buffer, filename)
             today_date = datetime.now().strftime("%Y-%m-%d")
-
             system_prompt = f"""
             You are an AI model specializing in extracting structured information from resumes.
             Parse the text and produce a JSON structure with these top-level fields, each of the following keys must be present:
@@ -161,7 +178,6 @@ class ResumeScoringService:
             - Calculate work_experience and educations_duration based on the start and end dates. Ensure that consecutive periods (without gaps) are treated as distinct and add up the durations without including the gap between roles.
             - If "present," "ongoing," or similar terms like these are mentioned, then use today's date {today_date} as the date_end and calculate the duration accordingly.
             """
-
             user_prompt = f"""
             Extract structured information from this resume text:
             {text}
@@ -175,18 +191,15 @@ class ResumeScoringService:
             7. Return a valid JSON output with accurate dates and durations.
             8. If no skills are explicitly or less than 10 are mentioned in the resume, generate a total of 10 relevant skills based on the candidate's experience and education.
             """
-
             structured_data = await self.gpt_service.extract_with_prompts(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_schema=ResumeSchema
             )
-
             if structured_data.get('experiences'):
                 structured_data['work_experience'] = self.calculate_total_work_experience(
                     [{'date_start': exp['date_start'], 'date_end': exp['date_end']} for exp in structured_data['experiences']]
                 )
-
             return structured_data
 
         except Exception as e:
@@ -198,8 +211,8 @@ class ResumeScoringService:
         Vectorizes the resume content for comparison with the job description.
         """
         resume_text = (
-            f"{resume.get('candidate_name', '')} "
-            f"{' '.join(resume.get('skills', {}).get('primary_skills', []))} "
+            f"{resume.get('candidate_name', '')} " +
+            f"{' '.join(resume.get('skills', {}).get('primary_skills', []))} " +
             f"{' '.join([exp.get('description', '') for exp in resume.get('experiences', [])])}"
         )
         return await self.gpt_service.get_text_embedding(resume_text)
@@ -210,7 +223,6 @@ class ResumeScoringService:
         """
         resume_embedding = await self.vectorize_resume(resume)
         jd_embedding = self.job_description_enhancer.temp_storage.get("vectorized_jd", [])
-        
         return cosine_similarity(np.array(jd_embedding), np.array(resume_embedding))
 
     async def score_resume(self, resume: Dict[str, Any], combined_criteria: str, generated_candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -271,72 +283,52 @@ class ResumeScoringService:
 
     Generated Dummy Candidates for comparison: {generated_candidates}
         """
-
         try:
-            # Call GPT service (this will now properly be inside a try block with exception handling)
             scoring_result = await self.gpt_service.extract_with_prompts(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_schema=ResumeScoringSchema
             )
             return scoring_result
-
         except Exception as e:
             logger.error(f"Error in scoring resume: {str(e)}", exc_info=True)
             raise Exception(f"Error in scoring resume: {str(e)}")
 
     def calculate_total_work_experience(self, experiences: List[Dict[str, str]]) -> Dict[str, int]:
-        """
-        Calculate the total work experience by handling overlapping periods and calculating the duration in years and months.
-
-        Args:
-        - experiences: A list of dictionaries, each containing 'date_start' and 'date_end'.
-        
-        Returns:
-        - A dictionary with the total years and months of work experience.
-        """
         if not experiences:
             print("No experiences provided")
             return {'years': 0, 'months': 0}
-
         total_months = 0
-        parsed_experiences = [
-            {'start': self.parse_date(exp['date_start']), 'end': self.parse_date(exp['date_end'])} for exp in experiences
-        ]
+        parsed_experiences = [{'start': self.parse_date(exp['date_start']), 'end': self.parse_date(exp['date_end'])} for exp in experiences]
         parsed_experiences.sort(key=lambda x: x['start'])
-
-        
         current_start = parsed_experiences[0]['start']
         current_end = parsed_experiences[0]['end']
-
         for i in range(1, len(parsed_experiences)):
             start = parsed_experiences[i]['start']
             end = parsed_experiences[i]['end']
-            
             if start <= current_end:
-                
                 current_end = max(current_end, end)
             else:
-                
                 total_months += (current_end.year - current_start.year) * 12 + current_end.month - current_start.month
                 current_start = start
                 current_end = end
-        
-        
         total_months += (current_end.year - current_start.year) * 12 + current_end.month - current_start.month
-        
-        
         years = total_months // 12
         months = total_months % 12
-
         return {'years': years, 'months': months}
 
     def parse_date(self, date_string: str) -> datetime:
-        """
-        Parses a date string in the format 'YYYY-MM-DD' and returns a datetime object.
-        If the date string is empty or invalid, the current date is returned.
-        """
         try:
             return datetime.strptime(date_string, '%Y-%m-%d')
         except ValueError:
-            return datetime.now()  # If the date is invalid, return the current date
+            return datetime.now()
+    
+    # New function to retrieve matching candidates for a given subskill
+    def match_candidates_for_subskill(self, experience_bucket: str, skill_name: str, subskill_name: str) -> List[Dict[str, Any]]:
+        """
+        Uses the Neo4j service to find candidates that match all fixed criteria:
+        Industry: 'Finances', Job Role: 'Risk Advisory & Internal Auditor',
+        Experience: experience_bucket, Skill: skill_name, SubSkill: subskill_name.
+        Returns a list of dictionaries with candidate names and scores.
+        """
+        return self.neo4j_service.find_matching_candidates(experience_bucket, skill_name, subskill_name)

@@ -46,9 +46,11 @@ class ResumeScoringService:
         """
         Creates a mapping list where each entry is a dictionary with:
             'skill': a primary skill,
-            'subskills': (if any) a list of secondary skills that do not appear in primary.
+            'subskills': a list of secondary skills (filtered so that none appear in primary).
+        Defaults to empty lists if inputs are None.
         """
-        # Get disjoint lists
+        primary_skills = primary_skills or []
+        secondary_skills = secondary_skills or []
         unique_primary = []
         for s in primary_skills:
             if s not in unique_primary:
@@ -66,11 +68,12 @@ class ResumeScoringService:
     async def process_bulk_resumes(self, resume_files: List[BytesIO], filenames: List[str], user_input: str) -> List[Dict[str, Any]]:
         """
         Processes multiple uploaded resumes:
-         - Parses and scores each resume (using overall resume score only)
+         - Parses and scores each resume (overall resume score)
          - Creates candidate nodes using fixed Industry 'Finances' and Job Role 'Risk Advisory & Internal Auditor'
-         - Uses conditional linking: if a candidate’s skill mapping returns non‑empty subskills then the candidate is linked to each subskill node; otherwise, linked directly to the Skill node.
-         - Retrieves stored candidates for the same job role and matching candidate–skill information,
-           appending these details to the criteria passed to the GPT scoring prompt.
+         - Uses conditional linking: if candidate’s skill mapping returns non‑empty subskills then candidate is linked to each subskill node;
+           otherwise, candidate is linked directly to the Skill node.
+         - Retrieves stored candidates for the fixed job role and matching candidate–skill details,
+           and appends these details to the combined criteria.
          - Returns a list of scoring results for each resume.
         """
         try:
@@ -93,13 +96,10 @@ class ResumeScoringService:
                 experience_years = extracted_resume.get("work_experience", {}).get("years", 0)
                 experience_bucket = self.map_experience_to_bucket(experience_years)
 
-                # Create Experience node for linking skills
                 self.neo4j_service.create_experience_node(experience_bucket)
 
-                # Retrieve stored candidates for fixed job role
                 stored_candidates = self.neo4j_service.find_candidates_for_job_role(fixed_job_role)
 
-                # Build matching info from candidate's skills
                 primary_skills = extracted_resume.get("skills", {}).get("primary_skills", [])
                 secondary_skills = extracted_resume.get("skills", {}).get("secondary_skills", [])
                 combined_mapping = self.map_skills_to_conditional(primary_skills, secondary_skills)
@@ -114,14 +114,12 @@ class ResumeScoringService:
                     else:
                         matches = self.neo4j_service.find_candidates_for_same_experience_skill(experience_bucket, skill_name)
                         matching_info += f"Skill: {skill_name}, Matches: {matches}\n"
-
                 combined_criteria = f"{user_input}\n\n{enhanced_jd}\n\n{generated_candidates}\n\nStored Candidates: {stored_candidates}\nMatching Info:\n{matching_info}"
                 resume_scoring = await self.score_resume(extracted_resume, combined_criteria, generated_candidates)
                 overall_resume_score = resume_scoring.get("resume_score", 0)
 
                 self.neo4j_service.create_candidate(candidate_name, overall_resume_score)
 
-                # Conditional linking: link candidate to subskill nodes if subskills exist; otherwise, link to Skill node.
                 for mapping_entry in combined_mapping:
                     skill_name = mapping_entry['skill']
                     self.neo4j_service.add_skill(experience_bucket, skill_name)

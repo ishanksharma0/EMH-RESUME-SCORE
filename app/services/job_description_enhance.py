@@ -22,8 +22,9 @@ class JobDescriptionEnhancer:
     and storing them in Neo4j using the structure:
       Finances → Risk Advisory & Internal Auditor → Skill → Candidate
 
-    For candidate linking, if a candidate’s mapping for a given skill returns a non-empty list of subskills,
-    the candidate is linked to each subskill node; otherwise, the candidate is linked directly to the Skill node.
+    Conditional Candidate–Skill Linking:
+      - If a candidate’s skill mapping returns a non‑empty subskills list then the candidate is linked to each subskill node.
+      - Otherwise the candidate is linked directly to the Skill node.
     """
     def __init__(self):
         logger.info("JobDescriptionEnhancer initialized successfully.")
@@ -52,6 +53,8 @@ class JobDescriptionEnhancer:
           - 'skills': unique primary skills
           - 'subskills': unique secondary skills that do not appear in primary.
         """
+        primary_skills = primary_skills or []
+        secondary_skills = secondary_skills or []
         unique_primary = []
         for s in primary_skills:
             if s not in unique_primary:
@@ -67,96 +70,67 @@ class JobDescriptionEnhancer:
         """
         Creates a mapping list where each entry is a dictionary with:
             'skill': a primary skill,
-            'subskills': (if any) a list of secondary skills (filtered so that none appear in primary).
+            'subskills': a list of secondary skills (filtered so that none appear in primary).
         """
         unique = self.map_unique_skills(primary_skills, secondary_skills)
         mapping = []
         for main_skill in unique["skills"]:
-            # For each primary skill, if there are any secondary skills overall, we consider them as subskills.
             mapping.append({'skill': main_skill, 'subskills': [{'subskill': s} for s in unique["subskills"]]})
         return mapping
 
     async def enhance_job_description(self, file_buffer: BytesIO, filename: str):
         """
-        Extracts, enhances a job description, generates sample dummy candidate profiles, 
+        Extracts, enhances a job description, generates sample dummy candidate profiles,
         vectorizes the JD, and stores them in Neo4j using the structure:
           Finances → Risk Advisory & Internal Auditor → Skill → Candidate
-
-        Candidate linking is conditional:
-          - If a candidate mapping shows non-empty subskills for a skill, the candidate is linked to each subskill node.
-          - Otherwise, the candidate is linked directly to the Skill node.
+        (Candidates are linked conditionally.)
         """
         try:
-            # 1) Extract job description
             structured_data = await self.extract_job_description(file_buffer, filename)
-
-            # 2) Enhance the job description
             enhanced_jd = await self.generate_enhanced_jd(structured_data)
-
-            # Force fixed Industry and Job Role
             enhanced_jd["industry_name"] = "Finances"
             enhanced_jd["job_title"] = "Risk Advisory & Internal Auditor"
-
-            # 3) Generate 6 sample dummy candidate profiles
             candidates = await self.generate_candidate_profiles(enhanced_jd)
-
-            # Ensure Industry and Job Role exist
             self.neo4j_service.add_industry("Finances")
             self.neo4j_service.add_job_role("Finances", "Risk Advisory & Internal Auditor")
-
-            # Process each generated dummy candidate
             for c in candidates.get("candidate_list", []):
                 if c is None or not isinstance(c, dict):
                     logger.error(f"Skipping invalid candidate entry: {c}")
                     continue
-                experience_data = c.get("experience")
-                if experience_data is None or not isinstance(experience_data, dict):
-                    logger.error(f"Skipping candidate {c.get('full_name', 'Unknown Candidate')}: Missing or invalid experience data")
-                    continue
+                # Default experience to 0 if missing
+                experience_data = c.get("experience") or {"years": 0, "months": 0}
+                if not isinstance(experience_data, dict):
+                    experience_data = {"years": 0, "months": 0}
                 candidate_name = c.get("full_name", "Unknown Candidate")
                 candidate_score = c.get("score", 0)
                 experience_years = experience_data.get("years", 0)
                 experience_bucket = self.map_experience_to_bucket(experience_years)
                 self.neo4j_service.create_experience_node(experience_bucket)
-
-                # Create candidate node with overall candidate score
                 self.neo4j_service.create_candidate(candidate_name, candidate_score)
-
-                # Combine primary and secondary skills using conditional mapping
                 primary_skills = c.get("key_skills", {}).get("primary_skills", [])
                 secondary_skills = c.get("key_skills", {}).get("secondary_skills", [])
                 combined_mapping = self.map_skills_to_conditional(primary_skills, secondary_skills)
-
                 for mapping_entry in combined_mapping:
                     skill_name = mapping_entry['skill']
                     self.neo4j_service.add_skill(experience_bucket, skill_name)
                     if mapping_entry['subskills']:
-                        # If there are subskills, create each subskill node
                         for subskill_entry in mapping_entry['subskills']:
                             subskill_name = subskill_entry['subskill']
                             self.neo4j_service.create_subskill_under_skill(experience_bucket, skill_name, subskill_name)
-                        # Link candidate to each subskill node (and not to the parent Skill)
                         for subskill_entry in mapping_entry['subskills']:
                             subskill_name = subskill_entry['subskill']
                             self.neo4j_service.link_candidate_to_subskill(candidate_name, subskill_name)
                     else:
-                        # If no subskills exist, link candidate directly to the Skill node
                         self.neo4j_service.link_candidate_to_skill(candidate_name, skill_name)
-
-            # Vectorize the enhanced job description
             vectorized_jd = await self.vectorize_job_description(enhanced_jd)
-
-            # Store outputs in temporary storage
             self.temp_storage["enhanced_job_description"] = enhanced_jd
             self.temp_storage["candidates"] = candidates
             self.temp_storage["vectorized_jd"] = vectorized_jd
-
             return {
                 "enhanced_job_description": enhanced_jd,
                 "generated_candidates": candidates,
                 "vectorized_jd": vectorized_jd
             }
-
         except Exception as e:
             logger.error(f"Error enhancing job description '{filename}': {str(e)}", exc_info=True)
             raise Exception(f"Error enhancing job description '{filename}': {str(e)}")

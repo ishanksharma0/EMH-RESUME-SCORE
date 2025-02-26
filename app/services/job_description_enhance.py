@@ -23,8 +23,8 @@ class JobDescriptionEnhancer:
       Finances → Risk Advisory & Internal Auditor → Skill → Candidate
 
     Conditional Candidate–Skill Linking:
-      - If a candidate’s skill mapping returns a non‑empty subskills list then the candidate is linked to each subskill node.
-      - Otherwise the candidate is linked directly to the Skill node.
+      - If a candidate’s skill mapping returns a non‑empty subskills list then the candidate is linked to each SubSkill node.
+      - Otherwise, the candidate is linked directly to the Skill node.
     """
     def __init__(self):
         logger.info("JobDescriptionEnhancer initialized successfully.")
@@ -52,6 +52,7 @@ class JobDescriptionEnhancer:
         Combines both primary and secondary skills into two disjoint lists:
           - 'skills': unique primary skills
           - 'subskills': unique secondary skills that do not appear in primary.
+        Additionally, remove specific duplicates per your recommendations.
         """
         primary_skills = primary_skills or []
         secondary_skills = secondary_skills or []
@@ -63,7 +64,11 @@ class JobDescriptionEnhancer:
         for s in secondary_skills:
             if s not in unique_secondary:
                 unique_secondary.append(s)
+        # Exclude any secondary that already appears in primary
         filtered_secondary = [s for s in unique_secondary if s not in unique_primary]
+        # Remove duplicates/conflicts as identified:
+        conflicts = {"Problem Solving", "Communication", "Critical Thinking"}
+        filtered_secondary = [s for s in filtered_secondary if s not in conflicts]
         return {"skills": unique_primary, "subskills": filtered_secondary}
 
     def map_skills_to_conditional(self, primary_skills: List[str], secondary_skills: List[str]) -> List[Dict[str, Any]]:
@@ -75,7 +80,11 @@ class JobDescriptionEnhancer:
         unique = self.map_unique_skills(primary_skills, secondary_skills)
         mapping = []
         for main_skill in unique["skills"]:
-            mapping.append({'skill': main_skill, 'subskills': [{'subskill': s} for s in unique["subskills"]]})
+            mapping.append({
+                'skill': main_skill,
+                # Always include the filtered secondary skills for conditional linking.
+                'subskills': [{'subskill': s} for s in unique["subskills"]]
+            })
         return mapping
 
     async def enhance_job_description(self, file_buffer: BytesIO, filename: str):

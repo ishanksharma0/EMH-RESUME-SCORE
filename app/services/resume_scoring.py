@@ -60,9 +60,15 @@ class ResumeScoringService:
             if s not in unique_secondary:
                 unique_secondary.append(s)
         filtered_secondary = [s for s in unique_secondary if s not in unique_primary]
+        # Remove conflicting entries as identified
+        conflicts = {"Problem Solving", "Communication", "Critical Thinking"}
+        filtered_secondary = [s for s in filtered_secondary if s not in conflicts]
         mapping = []
         for main_skill in unique_primary:
-            mapping.append({'skill': main_skill, 'subskills': [{'subskill': s} for s in filtered_secondary]})
+            mapping.append({
+                'skill': main_skill,
+                'subskills': [{'subskill': s} for s in filtered_secondary]
+            })
         return mapping
 
     async def process_bulk_resumes(self, resume_files: List[BytesIO], filenames: List[str], user_input: str) -> List[Dict[str, Any]]:
@@ -70,8 +76,8 @@ class ResumeScoringService:
         Processes multiple uploaded resumes:
          - Parses and scores each resume (overall resume score)
          - Creates candidate nodes using fixed Industry 'Finances' and Job Role 'Risk Advisory & Internal Auditor'
-         - Uses conditional linking: if candidate’s skill mapping returns non‑empty subskills then candidate is linked to each subskill node;
-           otherwise, candidate is linked directly to the Skill node.
+         - Uses conditional linking: if a candidate’s skill mapping returns non‑empty subskills then the candidate is linked to each SubSkill node;
+           otherwise, the candidate is linked directly to the Skill node.
          - Retrieves stored candidates for the fixed job role and matching candidate–skill details,
            and appends these details to the combined criteria.
          - Returns a list of scoring results for each resume.
@@ -189,9 +195,12 @@ class ResumeScoringService:
                 - name (string)
             10) skills (object containing 'primary_skills' (array of strings) and 'secondary_skills' (array of strings))
 
+            11) certifications (array of objects, each with:
+                - name (string) any sort of online or offline certification or courses done by the candidate.
+
             Key instructions for duration calculations:
             - Calculate work_experience and educations_duration based on the start and end dates. Ensure that consecutive periods (without gaps) are treated as distinct and add up the durations without including the gap between roles.
-            - If "present," "ongoing," or similar terms like these are mentioned, then use today's date {today_date} as the date_end and calculate the duration accordingly.
+            - If "present," "ongoing," "current," or similar terms are mentioned, then use today's date {today_date} as the date_end and calculate the duration accordingly.
             """
             user_prompt = f"""
             Extract structured information from this resume text:
@@ -292,9 +301,9 @@ class ResumeScoringService:
         - A comparison of the candidate to the closest matching sample candidate from the generated set.
         - Recommendations for improvement to help the candidate better match the job description.
 
-    Resume details: {resume}
+        Resume details: {resume}
 
-    Enhanced Job Description + User Input + Matching Candidates: {combined_criteria}
+        Enhanced Job Description + User Input + Matching Candidates: {combined_criteria}
         """
         try:
             scoring_result = await self.gpt_service.extract_with_prompts(

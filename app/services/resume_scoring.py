@@ -11,7 +11,6 @@ import numpy as np
 
 logger = Logger(__name__).get_logger()
 
-# Cosine similarity function remains unchanged
 def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
     if not np.any(vec1) or not np.any(vec2):
         return 0.0
@@ -19,10 +18,9 @@ def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
 
 class ResumeScoringService:
     """
-    Service for extracting structured resume details, scoring resumes against the enhanced job description, 
+    Service for extracting structured resume details, scoring resumes against the enhanced job description,
     and returning a structured comparison report.
     """
-
     def __init__(self, job_description_enhancer):
         logger.info("ResumeScoringService initialized successfully.")
         config = ConfigService()
@@ -44,43 +42,46 @@ class ResumeScoringService:
         else:
             return "16+"
 
-    def map_skills_to_skills_and_subskills(self, primary_skills: List[str], secondary_skills: List[str]) -> List[Dict[str, Any]]:
+    def map_skills_to_conditional(self, primary_skills: List[str], secondary_skills: List[str]) -> List[Dict[str, Any]]:
         """
-        Combines both primary and secondary skills into a single mapping where each skill becomes a higher‐level skill
-        and every other skill becomes its subskill.
+        Creates a mapping list where each entry is a dictionary with:
+            'skill': a primary skill,
+            'subskills': (if any) a list of secondary skills that do not appear in primary.
         """
-        all_skills = primary_skills + secondary_skills
-        results = []
-        for skill in all_skills:
-            subskills = []
-            for other_skill in all_skills:
-                if other_skill != skill:
-                    subskills.append({'subskill': other_skill})
-            results.append({'skill': skill, 'subskills': subskills})
-        return results
+        # Get disjoint lists
+        unique_primary = []
+        for s in primary_skills:
+            if s not in unique_primary:
+                unique_primary.append(s)
+        unique_secondary = []
+        for s in secondary_skills:
+            if s not in unique_secondary:
+                unique_secondary.append(s)
+        filtered_secondary = [s for s in unique_secondary if s not in unique_primary]
+        mapping = []
+        for main_skill in unique_primary:
+            mapping.append({'skill': main_skill, 'subskills': [{'subskill': s} for s in filtered_secondary]})
+        return mapping
 
     async def process_bulk_resumes(self, resume_files: List[BytesIO], filenames: List[str], user_input: str) -> List[Dict[str, Any]]:
         """
         Processes multiple uploaded resumes:
          - Parses and scores each resume (using overall resume score only)
          - Creates candidate nodes using fixed Industry 'Finances' and Job Role 'Risk Advisory & Internal Auditor'
-         - Combines primary and secondary skills into higher-level skills and subskills
-         - Links each candidate to every subskill (using the overall resume score)
-         - (Optional) Retrieves matching candidates that meet all conditions (Industry, Job Role, Experience, Skill, SubSkill)
+         - Uses conditional linking: if a candidate’s skill mapping returns non‑empty subskills then the candidate is linked to each subskill node; otherwise, linked directly to the Skill node.
+         - Retrieves stored candidates for the same job role and matching candidate–skill information,
+           appending these details to the criteria passed to the GPT scoring prompt.
          - Returns a list of scoring results for each resume.
         """
         try:
-            # Ensure that the enhanced JD and dummy candidates have been generated already
             if "enhanced_job_description" not in self.job_description_enhancer.temp_storage:
                 raise ValueError("Enhanced Job Description not found. Run /api/job-description-enhance first.")
 
             enhanced_jd = self.job_description_enhancer.temp_storage["enhanced_job_description"]
             generated_candidates = self.job_description_enhancer.temp_storage["candidates"]
-
             fixed_industry = "Finances"
             fixed_job_role = "Risk Advisory & Internal Auditor"
 
-            # Ensure Industry and Job Role exist
             self.neo4j_service.add_industry(fixed_industry)
             self.neo4j_service.add_job_role(fixed_industry, fixed_job_role)
 
@@ -92,36 +93,52 @@ class ResumeScoringService:
                 experience_years = extracted_resume.get("work_experience", {}).get("years", 0)
                 experience_bucket = self.map_experience_to_bucket(experience_years)
 
-                # Create the Experience node
+                # Create Experience node for linking skills
                 self.neo4j_service.create_experience_node(experience_bucket)
 
-                # Compute overall resume score once for the uploaded resume
-                combined_criteria = f"{user_input}\n\n{enhanced_jd}\n\n{generated_candidates}"
+                # Retrieve stored candidates for fixed job role
+                stored_candidates = self.neo4j_service.find_candidates_for_job_role(fixed_job_role)
+
+                # Build matching info from candidate's skills
+                primary_skills = extracted_resume.get("skills", {}).get("primary_skills", [])
+                secondary_skills = extracted_resume.get("skills", {}).get("secondary_skills", [])
+                combined_mapping = self.map_skills_to_conditional(primary_skills, secondary_skills)
+                matching_info = ""
+                for mapping_entry in combined_mapping:
+                    skill_name = mapping_entry['skill']
+                    if mapping_entry['subskills']:
+                        for subskill_entry in mapping_entry['subskills']:
+                            subskill_name = subskill_entry['subskill']
+                            matches = self.neo4j_service.find_matching_candidates(experience_bucket, skill_name, subskill_name)
+                            matching_info += f"Skill: {skill_name}, SubSkill: {subskill_name}, Matches: {matches}\n"
+                    else:
+                        matches = self.neo4j_service.find_candidates_for_same_experience_skill(experience_bucket, skill_name)
+                        matching_info += f"Skill: {skill_name}, Matches: {matches}\n"
+
+                combined_criteria = f"{user_input}\n\n{enhanced_jd}\n\n{generated_candidates}\n\nStored Candidates: {stored_candidates}\nMatching Info:\n{matching_info}"
                 resume_scoring = await self.score_resume(extracted_resume, combined_criteria, generated_candidates)
                 overall_resume_score = resume_scoring.get("resume_score", 0)
 
-                # Create candidate node with overall resume score
                 self.neo4j_service.create_candidate(candidate_name, overall_resume_score)
 
-                # Extract combined skills from the resume
-                primary_skills = extracted_resume.get("skills", {}).get("primary_skills", [])
-                secondary_skills = extracted_resume.get("skills", {}).get("secondary_skills", [])
-                combined_skills = self.map_skills_to_skills_and_subskills(primary_skills, secondary_skills)
-
-                # For each combined skill, add skill and subskill nodes and link candidate to each subskill
-                for skill_info in combined_skills:
-                    skill_name = skill_info['skill']
+                # Conditional linking: link candidate to subskill nodes if subskills exist; otherwise, link to Skill node.
+                for mapping_entry in combined_mapping:
+                    skill_name = mapping_entry['skill']
                     self.neo4j_service.add_skill(experience_bucket, skill_name)
-                    for subskill_info in skill_info['subskills']:
-                        subskill_name = subskill_info['subskill']
-                        self.neo4j_service.create_subskill_under_skill(experience_bucket, skill_name, subskill_name)
-                        # Link candidate to subskill using overall resume score
-                        self.neo4j_service.link_candidate_to_subskill(candidate_name, subskill_name)
-
-                results.append(resume_scoring)
+                    if mapping_entry['subskills']:
+                        for subskill_entry in mapping_entry['subskills']:
+                            subskill_name = subskill_entry['subskill']
+                            self.neo4j_service.create_subskill_under_skill(experience_bucket, skill_name, subskill_name)
+                        for subskill_entry in mapping_entry['subskills']:
+                            subskill_name = subskill_entry['subskill']
+                            self.neo4j_service.link_candidate_to_subskill(candidate_name, subskill_name)
+                    else:
+                        self.neo4j_service.link_candidate_to_skill(candidate_name, skill_name)
 
                 similarity = await self.compute_similarity(extracted_resume, enhanced_jd)
                 resume_scoring["cosine_similarity"] = similarity
+
+                results.append(resume_scoring)
 
             return results
 
@@ -280,8 +297,6 @@ class ResumeScoringService:
     Resume details: {resume}
 
     Enhanced Job Description + User Input + Matching Candidates: {combined_criteria}
-
-    Generated Dummy Candidates for comparison: {generated_candidates}
         """
         try:
             scoring_result = await self.gpt_service.extract_with_prompts(
@@ -322,13 +337,3 @@ class ResumeScoringService:
             return datetime.strptime(date_string, '%Y-%m-%d')
         except ValueError:
             return datetime.now()
-    
-    # New function to retrieve matching candidates for a given subskill
-    def match_candidates_for_subskill(self, experience_bucket: str, skill_name: str, subskill_name: str) -> List[Dict[str, Any]]:
-        """
-        Uses the Neo4j service to find candidates that match all fixed criteria:
-        Industry: 'Finances', Job Role: 'Risk Advisory & Internal Auditor',
-        Experience: experience_bucket, Skill: skill_name, SubSkill: subskill_name.
-        Returns a list of dictionaries with candidate names and scores.
-        """
-        return self.neo4j_service.find_matching_candidates(experience_bucket, skill_name, subskill_name)

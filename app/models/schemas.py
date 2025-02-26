@@ -60,6 +60,7 @@ class ResumeSchema(BaseModel):
     educations: Optional[List[EducationDto]] = Field(None, description="List of educational qualifications")
     social_urls: Optional[List[SocialUrlDto]] = Field(None, description="List of social media URLs")
     languages: Optional[List[LanguageItemDto]] = Field(None, description="List of languages known")
+    certifications: Optional[List[LanguageItemDto]] = Field(None, description="List of any sort of online or offline certification or courses done by the candidate")
     skills: Optional[SkillsDto] = Field(None, description="Skills information")
 
 

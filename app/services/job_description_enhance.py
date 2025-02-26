@@ -18,7 +18,12 @@ def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
 
 class JobDescriptionEnhancer:
     """
-    Service for extracting and enhancing job descriptions, followed by generating sample candidate profiles.
+    Service for extracting and enhancing job descriptions, generating sample candidate profiles,
+    and storing them in Neo4j using the structure:
+      Finances → Risk Advisory & Internal Auditor → Skill → Candidate
+
+    For candidate linking, if a candidate’s mapping for a given skill returns a non-empty list of subskills,
+    the candidate is linked to each subskill node; otherwise, the candidate is linked directly to the Skill node.
     """
     def __init__(self):
         logger.info("JobDescriptionEnhancer initialized successfully.")
@@ -41,11 +46,45 @@ class JobDescriptionEnhancer:
         else:
             return "16+"
 
+    def map_unique_skills(self, primary_skills: List[str], secondary_skills: List[str]) -> Dict[str, List[str]]:
+        """
+        Combines both primary and secondary skills into two disjoint lists:
+          - 'skills': unique primary skills
+          - 'subskills': unique secondary skills that do not appear in primary.
+        """
+        unique_primary = []
+        for s in primary_skills:
+            if s not in unique_primary:
+                unique_primary.append(s)
+        unique_secondary = []
+        for s in secondary_skills:
+            if s not in unique_secondary:
+                unique_secondary.append(s)
+        filtered_secondary = [s for s in unique_secondary if s not in unique_primary]
+        return {"skills": unique_primary, "subskills": filtered_secondary}
+
+    def map_skills_to_conditional(self, primary_skills: List[str], secondary_skills: List[str]) -> List[Dict[str, Any]]:
+        """
+        Creates a mapping list where each entry is a dictionary with:
+            'skill': a primary skill,
+            'subskills': (if any) a list of secondary skills (filtered so that none appear in primary).
+        """
+        unique = self.map_unique_skills(primary_skills, secondary_skills)
+        mapping = []
+        for main_skill in unique["skills"]:
+            # For each primary skill, if there are any secondary skills overall, we consider them as subskills.
+            mapping.append({'skill': main_skill, 'subskills': [{'subskill': s} for s in unique["subskills"]]})
+        return mapping
+
     async def enhance_job_description(self, file_buffer: BytesIO, filename: str):
         """
-        Extracts, enhances a job description, generates sample candidate profiles, 
+        Extracts, enhances a job description, generates sample dummy candidate profiles, 
         vectorizes the JD, and stores them in Neo4j using the structure:
-        Finances -> Risk Advisory & Internal Auditor -> Skill -> SubSkill -> Candidate
+          Finances → Risk Advisory & Internal Auditor → Skill → Candidate
+
+        Candidate linking is conditional:
+          - If a candidate mapping shows non-empty subskills for a skill, the candidate is linked to each subskill node.
+          - Otherwise, the candidate is linked directly to the Skill node.
         """
         try:
             # 1) Extract job description
@@ -58,7 +97,7 @@ class JobDescriptionEnhancer:
             enhanced_jd["industry_name"] = "Finances"
             enhanced_jd["job_title"] = "Risk Advisory & Internal Auditor"
 
-            # 3) Generate 6 sample candidates
+            # 3) Generate 6 sample dummy candidate profiles
             candidates = await self.generate_candidate_profiles(enhanced_jd)
 
             # Ensure Industry and Job Role exist
@@ -77,26 +116,32 @@ class JobDescriptionEnhancer:
                 candidate_name = c.get("full_name", "Unknown Candidate")
                 candidate_score = c.get("score", 0)
                 experience_years = experience_data.get("years", 0)
-                # (Experience bucket is used here only for node creation of Skill/SubSkill)
                 experience_bucket = self.map_experience_to_bucket(experience_years)
                 self.neo4j_service.create_experience_node(experience_bucket)
 
-                # Create candidate node with overall score
+                # Create candidate node with overall candidate score
                 self.neo4j_service.create_candidate(candidate_name, candidate_score)
 
-                # Combine primary and secondary skills into a mapping
+                # Combine primary and secondary skills using conditional mapping
                 primary_skills = c.get("key_skills", {}).get("primary_skills", [])
                 secondary_skills = c.get("key_skills", {}).get("secondary_skills", [])
-                combined_skills = self.map_skills_to_skills_and_subskills(primary_skills, secondary_skills)
+                combined_mapping = self.map_skills_to_conditional(primary_skills, secondary_skills)
 
-                for skill_info in combined_skills:
-                    skill_name = skill_info['skill']
+                for mapping_entry in combined_mapping:
+                    skill_name = mapping_entry['skill']
                     self.neo4j_service.add_skill(experience_bucket, skill_name)
-                    for subskill_info in skill_info['subskills']:
-                        subskill_name = subskill_info['subskill']
-                        self.neo4j_service.create_subskill_under_skill(experience_bucket, skill_name, subskill_name)
-                        # Link candidate to subskill (only once with overall candidate score)
-                        self.neo4j_service.link_candidate_to_subskill(candidate_name, subskill_name)
+                    if mapping_entry['subskills']:
+                        # If there are subskills, create each subskill node
+                        for subskill_entry in mapping_entry['subskills']:
+                            subskill_name = subskill_entry['subskill']
+                            self.neo4j_service.create_subskill_under_skill(experience_bucket, skill_name, subskill_name)
+                        # Link candidate to each subskill node (and not to the parent Skill)
+                        for subskill_entry in mapping_entry['subskills']:
+                            subskill_name = subskill_entry['subskill']
+                            self.neo4j_service.link_candidate_to_subskill(candidate_name, subskill_name)
+                    else:
+                        # If no subskills exist, link candidate directly to the Skill node
+                        self.neo4j_service.link_candidate_to_skill(candidate_name, skill_name)
 
             # Vectorize the enhanced job description
             vectorized_jd = await self.vectorize_job_description(enhanced_jd)
@@ -168,24 +213,6 @@ class JobDescriptionEnhancer:
         except Exception as e:
             logger.error(f"Error parsing job description '{filename}': {str(e)}", exc_info=True)
             raise
-
-    def map_skills_to_skills_and_subskills(self, primary_skills: List[str], secondary_skills: List[str]) -> List[Dict[str, Any]]:
-        """
-        Combines primary and secondary skills into a single mapping where each skill becomes a higher-level skill,
-        and every other skill becomes its subskill.
-        """
-        all_skills = primary_skills + secondary_skills
-        results = []
-        for skill in all_skills:
-            subskills = []
-            for other_skill in all_skills:
-                if other_skill != skill:
-                    subskills.append({'subskill': other_skill})
-            results.append({
-                'skill': skill,
-                'subskills': subskills
-            })
-        return results
 
     async def generate_enhanced_jd(self, structured_data: Dict[str, Any]) -> Dict[str, Any]:
         try:

@@ -100,6 +100,19 @@ class Neo4jService:
             )
         logger.info(f"Candidate '{candidate_name}' linked to subskill '{subskill_name}'.")
 
+    def link_candidate_to_skill(self, candidate_name: str, skill_name: str):
+        with self.driver.session() as session:
+            session.run(
+                """
+                MATCH (c:Candidate {name: $candidate_name})
+                MATCH (s:Skill {name: $skill_name})
+                MERGE (c)-[:BELONGS_TO_SKILL]->(s)
+                """,
+                candidate_name=candidate_name,
+                skill_name=skill_name
+            )
+        logger.info(f"Candidate '{candidate_name}' linked to skill '{skill_name}'.")
+
     def find_candidates_for_job_role(self, job_title: str) -> List[str]:
         with self.driver.session() as session:
             result = session.run(
@@ -118,8 +131,8 @@ class Neo4jService:
         MATCH (job:JobRole {title: 'Risk Advisory & Internal Auditor'})
               -[:HAS_EXPERIENCE_RANGE]->(e:Experience {range: $experience_bucket})
               -[:HAS_SKILL]->(s:Skill {name: $skill_name})
-              <-[:HAS_SKILL]-(c:Candidate)
-        OPTIONAL MATCH (c)-[:HAS_SKILL]->(otherSkill:Skill)
+              <-[:BELONGS_TO_SKILL]-(c:Candidate)
+        OPTIONAL MATCH (c)-[:BELONGS_TO_SKILL]->(otherSkill:Skill)
         RETURN c.name AS candidate_name, c.score AS candidate_score, collect(distinct otherSkill.name) AS candidate_skills
         """
         with self.driver.session() as session:
@@ -166,3 +179,20 @@ class Neo4jService:
                            "candidate_score": record["candidate_score"]} for record in result]
         logger.info(f"Found {len(candidates)} matching candidates for experience '{experience_bucket}', skill '{skill_name}', subskill '{subskill_name}'.")
         return candidates
+
+    def link_candidate_to_job_role(self, candidate_name: str, job_role: str):
+        try:
+            with self.driver.session() as session:
+                session.run(
+                    """
+                    MATCH (r:JobRole {title: $job_role})
+                    MATCH (c:Candidate {name: $candidate_name})
+                    MERGE (c)-[:BELONGS_TO_JOB_ROLE]->(r)
+                    """,
+                    job_role=job_role,
+                    candidate_name=candidate_name
+                )
+            logger.info(f"Candidate '{candidate_name}' linked to Job Role '{job_role}'.")
+        except Exception as e:
+            logger.error(f"Error linking candidate to job role: {str(e)}", exc_info=True)
+            raise

@@ -69,6 +69,9 @@ class ResumeParser:
             9) languages (array of objects, each with:
                 - name (string)
             10) skills (object containing 'primary_skills' (array of strings) and 'secondary_skills' (array of strings))
+            
+            11) certifications (array of objects, each with:
+                - name (string) any sort of online or offline certification or courses done by the candidate.
 
             Key instructions for duration calculations:
             - Calculate work_experience and educations_duration based on the start and end dates. Ensure that consecutive periods (without gaps) are treated as distinct and add up the durations without including the gap between roles.

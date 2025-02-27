@@ -52,7 +52,7 @@ class JobDescriptionEnhancer:
         Combines both primary and secondary skills into two disjoint lists:
           - 'skills': unique primary skills
           - 'subskills': unique secondary skills that do not appear in primary.
-        Additionally, remove specific duplicates per your recommendations.
+        Additionally, removes specific duplicate/conflicting entries.
         """
         primary_skills = primary_skills or []
         secondary_skills = secondary_skills or []
@@ -116,8 +116,9 @@ class JobDescriptionEnhancer:
                 experience_bucket = self.map_experience_to_bucket(experience_years)
                 self.neo4j_service.create_experience_node(experience_bucket)
                 self.neo4j_service.create_candidate(candidate_name, candidate_score)
-                primary_skills = c.get("key_skills", {}).get("primary_skills", [])
-                secondary_skills = c.get("key_skills", {}).get("secondary_skills", [])
+                key_skills = c.get("key_skills") or {}
+                primary_skills = key_skills.get("primary_skills", [])
+                secondary_skills = key_skills.get("secondary_skills", [])
                 combined_mapping = self.map_skills_to_conditional(primary_skills, secondary_skills)
                 for mapping_entry in combined_mapping:
                     skill_name = mapping_entry['skill']

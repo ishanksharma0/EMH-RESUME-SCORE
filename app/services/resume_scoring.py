@@ -48,6 +48,7 @@ class ResumeScoringService:
             'skill': a primary skill,
             'subskills': a list of secondary skills (filtered so that none appear in primary).
         Defaults to empty lists if inputs are None.
+        Also removes conflicting entries as identified.
         """
         primary_skills = primary_skills or []
         secondary_skills = secondary_skills or []
@@ -78,7 +79,7 @@ class ResumeScoringService:
          - Creates candidate nodes using fixed Industry 'Finances' and Job Role 'Risk Advisory & Internal Auditor'
          - Uses conditional linking: if a candidate’s skill mapping returns non‑empty subskills then the candidate is linked to each SubSkill node;
            otherwise, the candidate is linked directly to the Skill node.
-         - Retrieves stored candidates for the fixed job role and matching candidate–skill details,
+         - Retrieves stored candidates for the fixed job role and detailed matching candidate–skill information,
            and appends these details to the combined criteria.
          - Returns a list of scoring results for each resume.
         """
@@ -109,23 +110,29 @@ class ResumeScoringService:
                 primary_skills = extracted_resume.get("skills", {}).get("primary_skills", [])
                 secondary_skills = extracted_resume.get("skills", {}).get("secondary_skills", [])
                 combined_mapping = self.map_skills_to_conditional(primary_skills, secondary_skills)
-                matching_info = ""
+
+                similar_candidates_info = ""
+                # For each skill mapping entry, get detailed similar candidate info.
                 for mapping_entry in combined_mapping:
                     skill_name = mapping_entry['skill']
                     if mapping_entry['subskills']:
                         for subskill_entry in mapping_entry['subskills']:
                             subskill_name = subskill_entry['subskill']
-                            matches = self.neo4j_service.find_matching_candidates(experience_bucket, skill_name, subskill_name)
-                            matching_info += f"Skill: {skill_name}, SubSkill: {subskill_name}, Matches: {matches}\n"
+                            # Use a new method that returns detailed matching candidate info.
+                            similar = self.neo4j_service.find_matching_candidates(experience_bucket, skill_name, subskill_name)
+                            similar_candidates_info += f"Skill: {skill_name}, SubSkill: {subskill_name}, Matches: {similar}\n"
                     else:
-                        matches = self.neo4j_service.find_candidates_for_same_experience_skill(experience_bucket, skill_name)
-                        matching_info += f"Skill: {skill_name}, Matches: {matches}\n"
-                combined_criteria = f"{user_input}\n\n{enhanced_jd}\n\n{generated_candidates}\n\nStored Candidates: {stored_candidates}\nMatching Info:\n{matching_info}"
+                        similar = self.neo4j_service.find_candidates_for_same_experience_skill(experience_bucket, skill_name)
+                        similar_candidates_info += f"Skill: {skill_name}, Matches: {similar}\n"
+
+                combined_criteria = f"{user_input}\n\n{enhanced_jd}\n\n{generated_candidates}\n\nStored Candidates: {stored_candidates}\nSimilar Candidates Info:\n{similar_candidates_info}"
                 resume_scoring = await self.score_resume(extracted_resume, combined_criteria, generated_candidates)
                 overall_resume_score = resume_scoring.get("resume_score", 0)
 
                 self.neo4j_service.create_candidate(candidate_name, overall_resume_score)
 
+                # Conditional linking: if subskills exist for a mapping, link candidate to each subskill node;
+                # otherwise, link candidate directly to the Skill node.
                 for mapping_entry in combined_mapping:
                     skill_name = mapping_entry['skill']
                     self.neo4j_service.add_skill(experience_bucket, skill_name)

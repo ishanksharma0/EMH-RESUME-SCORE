@@ -49,31 +49,41 @@ class Neo4jService:
 
     def add_skill(self, experience_bucket: str, skill_name: str):
         with self.driver.session() as session:
-            session.run(
-                """
-                MATCH (e:Experience {range: $experience_bucket})
-                MERGE (s:Skill {name: $skill_name})
-                MERGE (e)-[:HAS_SKILL]->(s)
-                """,
-                experience_bucket=experience_bucket,
-                skill_name=skill_name
-            )
-        logger.info(f"Skill '{skill_name}' merged under experience '{experience_bucket}'.")
+            # Check if a SubSkill with the same name already exists
+            existing = session.run("MATCH (ss:SubSkill {name: $skill_name}) RETURN ss", skill_name=skill_name).single()
+            if existing:
+                logger.info(f"Skill '{skill_name}' not added because a SubSkill with the same name exists.")
+            else:
+                session.run(
+                    """
+                    MATCH (e:Experience {range: $experience_bucket})
+                    MERGE (s:Skill {name: $skill_name})
+                    MERGE (e)-[:HAS_SKILL]->(s)
+                    """,
+                    experience_bucket=experience_bucket,
+                    skill_name=skill_name
+                )
+                logger.info(f"Skill '{skill_name}' merged under experience '{experience_bucket}'.")
 
     def create_subskill_under_skill(self, experience_bucket: str, skill_name: str, subskill_name: str):
         with self.driver.session() as session:
-            session.run(
-                """
-                MATCH (e:Experience {range: $experience_bucket})
-                MATCH (s:Skill {name: $skill_name})
-                MERGE (ss:SubSkill {name: $subskill_name})
-                MERGE (s)-[:HAS_SUBSKILL]->(ss)
-                """,
-                experience_bucket=experience_bucket,
-                skill_name=skill_name,
-                subskill_name=subskill_name
-            )
-        logger.info(f"SubSkill '{subskill_name}' merged under Skill '{skill_name}' in '{experience_bucket}' experience bucket.")
+            # Check if a Skill with the same name already exists (preventing duplicate/conflict)
+            existing = session.run("MATCH (s:Skill {name: $subskill_name}) RETURN s", subskill_name=subskill_name).single()
+            if existing:
+                logger.info(f"SubSkill '{subskill_name}' not created because a Skill with the same name exists.")
+            else:
+                session.run(
+                    """
+                    MATCH (e:Experience {range: $experience_bucket})
+                    MATCH (s:Skill {name: $skill_name})
+                    MERGE (ss:SubSkill {name: $subskill_name})
+                    MERGE (s)-[:HAS_SUBSKILL]->(ss)
+                    """,
+                    experience_bucket=experience_bucket,
+                    skill_name=skill_name,
+                    subskill_name=subskill_name
+                )
+                logger.info(f"SubSkill '{subskill_name}' merged under Skill '{skill_name}' in '{experience_bucket}' experience bucket.")
 
     def create_candidate(self, candidate_name: str, overall_score: float):
         with self.driver.session() as session:
